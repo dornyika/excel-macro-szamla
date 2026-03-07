@@ -1,285 +1,366 @@
 ' ============================================
-' PRE-PROCESSING MACRO COLLECTION - VERSION 1
-' Last Updated: 2026-03-05
-' Fills target workbook sheets from source files in each subfolder.
-' Run BEFORE szamla processing macros (szamla-v107+).
+' SZAMLA PRE-PROCESS - VERSION 1
+' Last Updated: 2026-03-07
+' Futtatási sorrend: ELŐBB fut, mint a szamla-v107.vb
+' Célja: a sablonfájlt (TARGET_FILENAME) feltölti forrásfájlokból,
+'        almappánként feldolgozva a kiválasztott szülőmappa alatti könyvtárakat.
 ' ============================================
+
+Option Explicit
 
 Private Const TARGET_FILENAME As String = "pipalo_v20250827_tol_sablonom.xlsx"
-' ^ Update this when a new template version is released
+Private g_warnings As String
+
 
 ' ============================================
-' ENTRY POINTS
+' BELÉPÉSI PONT
 ' ============================================
 
 Sub Run_PreProcess_Batch()
     RunPreProcess_BatchFolders
 End Sub
 
+
+' ============================================
+' FŐFOLYAMAT
+' ============================================
+
 Sub RunPreProcess_BatchFolders()
-    ' Batch pre-process: iterate subfolders of a selected parent folder,
-    ' fill target workbook sheets from source files in each subfolder.
-
-    ' --- Step 1: Get period input ---
-    Dim yy As Integer, mm As Integer
-    If Not GetPeriodInput(yy, mm) Then Exit Sub
-
-    ' --- Step 2: Select parent folder ---
+    Dim period As String
     Dim parentFolder As String
+    Dim subFolders() As String
+    Dim subFolderCount As Long
+    Dim i As Long
+    Dim folderPath As String
+    Dim wb As Workbook
+    Dim result As String
+    Dim logLines() As String
+    Dim okCount As Long
+    Dim errCount As Long
+    Dim logPath As String
+    Dim prev4() As String
+    Dim prev4Str As String
+    Dim displayName As String
+    Dim confirmMsg As String
+    Dim fso As Object
+    Dim parentFolderObj As Object
+    Dim subFolderItem As Object
+    Dim candidate As String
+    Dim openErrNum As Long
+    Dim openErrDesc As String
+
+    ' --- 1. lépés: Időszak bekérése ---
+    period = GetPeriodInput()
+    If period = "" Then Exit Sub
+
+    ' --- 2. lépés: Szülőmappa kiválasztása ---
     With Application.FileDialog(msoFileDialogFolderPicker)
-        .Title = "Select parent folder containing subfolders to process"
+        .Title = "Válasszon szülőmappát (almappái tartalmazzák a feldolgozandó fájlokat)"
         .AllowMultiSelect = False
         If .Show = -1 Then
             parentFolder = .SelectedItems(1)
         Else
-            MsgBox "No folder selected. Operation cancelled.", vbInformation
+            MsgBox "Nem választott mappát. Megszakítás.", vbInformation
             Exit Sub
         End If
     End With
     If Right(parentFolder, 1) <> "\" Then parentFolder = parentFolder & "\"
 
-    ' --- Step 3: Collect valid subfolders into array (avoids Dir state issues) ---
-    Dim allSubFolders() As String
-    Dim allCount As Integer
-    allCount = 0
+    ' --- 3. lépés: Érvényes almappák összegyűjtése ---
+    ' FileSystemObject-et használunk, hogy elkerüljük az egymásba ágyazott Dir() hívásokat
+    subFolderCount = 0
+    ReDim subFolders(0)
 
-    Dim subFolder As String
-    subFolder = Dir(parentFolder, vbDirectory)
-    Do While subFolder <> ""
-        If subFolder <> "." And subFolder <> ".." Then
-            On Error Resume Next
-            Dim attr As Long
-            attr = GetAttr(parentFolder & subFolder)
-            On Error GoTo 0
-            If (attr And vbDirectory) = vbDirectory Then
-                ReDim Preserve allSubFolders(allCount)
-                allSubFolders(allCount) = subFolder
-                allCount = allCount + 1
-            End If
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set parentFolderObj = fso.GetFolder(parentFolder)
+
+    For Each subFolderItem In parentFolderObj.SubFolders
+        candidate = subFolderItem.Path
+        If Right(candidate, 1) <> "\" Then candidate = candidate & "\"
+        If Dir(candidate & TARGET_FILENAME) <> "" Then
+            ReDim Preserve subFolders(subFolderCount)
+            subFolders(subFolderCount) = candidate
+            subFolderCount = subFolderCount + 1
         End If
-        subFolder = Dir
-    Loop
+    Next subFolderItem
 
-    ' Filter to those containing TARGET_FILENAME
-    Dim validSubFolders() As String
-    Dim validCount As Integer
-    validCount = 0
-    Dim k As Integer
-    For k = 0 To allCount - 1
-        If Dir(parentFolder & allSubFolders(k) & "\" & TARGET_FILENAME) <> "" Then
-            ReDim Preserve validSubFolders(validCount)
-            validSubFolders(validCount) = allSubFolders(k)
-            validCount = validCount + 1
-        End If
-    Next k
+    Set parentFolderObj = Nothing
+    Set fso = Nothing
 
-    If validCount = 0 Then
-        MsgBox "No subfolders found containing '" & TARGET_FILENAME & "'.", vbExclamation
+    If subFolderCount = 0 Then
+        MsgBox "Nem található '" & TARGET_FILENAME & "' fájlt tartalmazó almappa.", vbExclamation
         Exit Sub
     End If
 
-    ' --- Step 4: Confirm ---
-    If MsgBox("Ready to pre-process " & validCount & " folder(s)." & vbCrLf & vbCrLf & _
-              "Period: v" & Format(yy, "00") & Format(mm, "00") & vbCrLf & _
-              "regi_tsz filter: previous 4 months." & vbCrLf & vbCrLf & _
-              "Continue?", vbYesNo + vbQuestion, "Pre-Processing") = vbNo Then
-        Exit Sub
-    End If
+    ' --- 4. lépés: Megerősítés ---
+    prev4 = GetPrev4Months(period)
+    prev4Str = prev4(0) & ", " & prev4(1) & ", " & prev4(2) & ", " & prev4(3)
 
-    ' --- Step 5: Optimize performance, keep status bar visible ---
+    confirmMsg = "Feldolgozásra kész:" & vbCrLf & vbCrLf & _
+                 "Periódus: " & period & vbCrLf & _
+                 "regi_tsz szűrés (S oszlop tartalmazza): " & prev4Str & vbCrLf & _
+                 "Almappák száma: " & subFolderCount & vbCrLf & vbCrLf & _
+                 "Folytatja?"
+
+    If MsgBox(confirmMsg, vbYesNo + vbQuestion, "Megerősítés") = vbNo Then Exit Sub
+
+    ' --- 5. lépés: Teljesítményoptimalizálás ---
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
     Application.EnableEvents = False
     Application.DisplayAlerts = False
     Application.DisplayStatusBar = True
 
-    ' --- Step 6: Process each valid subfolder ---
-    Dim processedCount As Long, errorCount As Long
-    processedCount = 0
-    errorCount = 0
+    ' --- 6. lépés: Almappák feldolgozása ---
+    ReDim logLines(subFolderCount - 1)
+    okCount = 0
+    errCount = 0
 
-    For k = 0 To validCount - 1
-        Dim targetPath As String
-        targetPath = parentFolder & validSubFolders(k) & "\" & TARGET_FILENAME
+    For i = 0 To subFolderCount - 1
+        folderPath = subFolders(i)
+        displayName = FolderDisplayName(folderPath)
 
-        Application.StatusBar = "Pre-processing (" & (k + 1) & "/" & validCount & "): " & validSubFolders(k)
+        Application.StatusBar = "Feldolgozás (" & (i + 1) & "/" & subFolderCount & "): " & displayName
         DoEvents
 
-        Dim wb As Workbook
+        ' Sablonfájl megnyitása
+        Set wb = Nothing
         On Error Resume Next
-        Set wb = Workbooks.Open(targetPath, ReadOnly:=False, UpdateLinks:=False)
+        Set wb = Workbooks.Open(folderPath & TARGET_FILENAME, ReadOnly:=False, UpdateLinks:=False)
+        openErrNum = Err.Number
+        openErrDesc = Err.Description
+        On Error GoTo 0
 
-        If Err.Number = 0 Then
-            wb.Activate
+        If openErrNum <> 0 Or wb Is Nothing Then
+            result = "[ERROR]:" & openErrNum & " " & openErrDesc
+        Else
+            result = TryFillAllSheets(wb, folderPath, period)
+        End If
 
-            FillAllSheets wb, parentFolder & validSubFolders(k) & "\", yy, mm, True
+        ' KRITIKUS: Beállítások visszaállítása mentés ELŐTT
+        Application.ScreenUpdating = True
+        Application.Calculation = xlCalculationAutomatic
+        Application.EnableEvents = True
+        Application.DisplayAlerts = True
+        DoEvents
 
-            ' CRITICAL: Restore settings BEFORE saving
-            Application.ScreenUpdating = True
-            Application.Calculation = xlCalculationAutomatic
-            Application.EnableEvents = True
-            Application.DisplayAlerts = True
-            DoEvents
-
-            wb.Activate
+        If Left(result, 7) = "[ERROR]" Then
+            On Error Resume Next
+            If Not wb Is Nothing Then wb.Close SaveChanges:=False
+            On Error GoTo 0
+            errCount = errCount + 1
+            logLines(i) = "[ERROR] " & displayName & " - ERROR:" & Mid(result, 8)
+        Else
+            On Error Resume Next
             wb.Save
             wb.Close SaveChanges:=False
-
-            ' Re-enable optimizations for next folder
-            Application.ScreenUpdating = False
-            Application.Calculation = xlCalculationManual
-            Application.EnableEvents = False
-            Application.DisplayAlerts = False
-
-            processedCount = processedCount + 1
-        Else
-            errorCount = errorCount + 1
+            On Error GoTo 0
+            okCount = okCount + 1
+            If result = "[OK]" Then
+                logLines(i) = "[OK]    " & displayName
+            Else
+                logLines(i) = "[WARN]  " & displayName & vbCrLf & g_warnings
+            End If
         End If
-        On Error GoTo 0
-    Next k
 
-    ' --- Restore ---
+        Set wb = Nothing
+
+        ' Optimalizálás visszakapcsolása a következő mappához
+        Application.ScreenUpdating = False
+        Application.Calculation = xlCalculationManual
+        Application.EnableEvents = False
+        Application.DisplayAlerts = False
+    Next i
+
+    ' --- 7. lépés: Végleges visszaállítás, napló, összegzés ---
     Application.StatusBar = False
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
     Application.EnableEvents = True
     Application.DisplayAlerts = True
 
-    MsgBox "Pre-processing complete!" & vbCrLf & vbCrLf & _
-           "Folders processed: " & processedCount & vbCrLf & _
-           "Errors: " & errorCount, vbInformation
+    logPath = WriteLogFile(parentFolder, period, logLines, subFolderCount, okCount, errCount)
+
+    MsgBox "Feldolgozás kész!" & vbCrLf & vbCrLf & _
+           "Feldolgozva: " & okCount & vbCrLf & _
+           "Hibák: " & errCount & vbCrLf & vbCrLf & _
+           "Napló: " & logPath, vbInformation
 End Sub
 
+
 ' ============================================
-' PERIOD INPUT
+' IDŐSZAK BEKÉRÉSE
 ' ============================================
 
-Private Function GetPeriodInput(ByRef yy As Integer, ByRef mm As Integer) As Boolean
-    Dim yyStr As String, mmStr As String
+Function GetPeriodInput() As String
+    Dim yr As String
+    Dim moStr As String
+    Dim mo As Integer
 
-    yyStr = InputBox("Enter year (2 digits, e.g. 26 for 2026):", "Period - Year")
-    If yyStr = "" Then
-        MsgBox "Year not entered. Operation cancelled.", vbInformation
-        GetPeriodInput = False
+    yr = InputBox("Adja meg az évet (2 jegyű, pl. 26):", "Év")
+    If yr = "" Then
+        GetPeriodInput = ""
         Exit Function
     End If
-    If Not IsNumeric(yyStr) Or Len(Trim(yyStr)) <> 2 Then
-        MsgBox "Invalid year. Please enter exactly 2 digits (e.g. 26).", vbExclamation
-        GetPeriodInput = False
-        Exit Function
-    End If
-
-    mmStr = InputBox("Enter month (1-12):", "Period - Month")
-    If mmStr = "" Then
-        MsgBox "Month not entered. Operation cancelled.", vbInformation
-        GetPeriodInput = False
-        Exit Function
-    End If
-    If Not IsNumeric(mmStr) Or CInt(mmStr) < 1 Or CInt(mmStr) > 12 Then
-        MsgBox "Invalid month. Please enter a number between 1 and 12.", vbExclamation
-        GetPeriodInput = False
+    If Not IsNumeric(yr) Or Len(Trim(yr)) <> 2 Then
+        MsgBox "Érvénytelen év. Csak 2 jegyű szám fogadható el (pl. 26).", vbExclamation
+        GetPeriodInput = ""
         Exit Function
     End If
 
-    yy = CInt(yyStr)
-    mm = CInt(mmStr)
-    GetPeriodInput = True
+    moStr = InputBox("Adja meg a hónapot (1-12):", "Hónap")
+    If moStr = "" Then
+        GetPeriodInput = ""
+        Exit Function
+    End If
+    If Not IsNumeric(moStr) Then
+        MsgBox "Érvénytelen hónap.", vbExclamation
+        GetPeriodInput = ""
+        Exit Function
+    End If
+    mo = CInt(moStr)
+    If mo < 1 Or mo > 12 Then
+        MsgBox "A hónap 1 és 12 közé kell essen.", vbExclamation
+        GetPeriodInput = ""
+        Exit Function
+    End If
+
+    GetPeriodInput = "v" & Trim(yr) & Format(mo, "00")
 End Function
 
+
 ' ============================================
-' ORCHESTRATOR
+' ELŐZŐ 4 HÓNAP YYMM KÓDOK
 ' ============================================
 
-Sub FillAllSheets(wb As Workbook, sourceFolder As String, yy As Integer, mm As Integer, Optional silent As Boolean = False)
-    ' Fill all 7 target sheets from source files in sourceFolder.
-    ' Sheet copies (reszletes, Nemzeti TAJ) are done first and in this order
-    ' so the final sheet order is: 1. Nemzeti TAJ, 2. reszletes, 3. existing sheets...
-    Call FillReszletes(wb, sourceFolder, silent)      ' inserted at pos 1
-    Call FillNemzetiTAJ(wb, sourceFolder, silent)     ' inserted at pos 1, pushes reszletes to pos 2
-    Call FillVissz(wb, sourceFolder, silent)
-    Call FillXLS(wb, sourceFolder, silent)
-    Call FillTsz(wb, sourceFolder, silent)
-    Call FillRegiTsz(wb, sourceFolder, yy, mm, silent)
-    Call FillUtolagos(wb, sourceFolder, yy, mm, silent)
+Function GetPrev4Months(period As String) As String()
+    Dim result(3) As String
+    Dim yr As Integer
+    Dim mo As Integer
+    Dim j As Integer
+
+    yr = CInt(Mid(period, 2, 2))
+    mo = CInt(Mid(period, 4, 2))
+
+    For j = 0 To 3
+        mo = mo - 1
+        If mo = 0 Then
+            mo = 12
+            yr = yr - 1
+            If yr < 0 Then yr = 99
+        End If
+        result(j) = Format(yr, "00") & Format(mo, "00")
+    Next j
+
+    GetPrev4Months = result
+End Function
+
+
+' ============================================
+' ORCHESTRÁTOR HIBAVÉDELEMMEL
+' ============================================
+
+Function TryFillAllSheets(wb As Workbook, folderPath As String, period As String) As String
+    g_warnings = ""
+    On Error GoTo errHandler
+    FillAllSheets wb, folderPath, period
+    If Len(g_warnings) > 0 Then
+        TryFillAllSheets = "[WARN]"
+    Else
+        TryFillAllSheets = "[OK]"
+    End If
+    Exit Function
+errHandler:
+    TryFillAllSheets = "[ERROR]:" & Err.Number & " " & Err.Description
+End Function
+
+Sub FillAllSheets(wb As Workbook, folderPath As String, period As String)
+    ' Sorrend fontos: reszletes pos. 1-re kerül, majd NemzetiTAJ pos. 1-re kerül
+    ' → végső sorrend: Nemzeti TAJ (1), reszletes (2), vissz (3), xls (4), tsz (5),
+    '                  regi_tsz_utolsó4honap (6), utólagos (7)
+    FillReszletes wb, folderPath
+    FillNemzetiTAJ wb, folderPath
+    FillVissz wb, folderPath
+    FillXLS wb, folderPath
+    FillTsz wb, folderPath
+    FillRegiTsz wb, folderPath, period
+    FillUtolagos wb, folderPath, period
 End Sub
 
+
 ' ============================================
-' SHEET FILL SUBS
+' MUNKALAPKITÖLTŐ SZUBRUTINOK
 ' ============================================
 
-Sub FillNemzetiTAJ(wb As Workbook, sourceFolder As String, Optional silent As Boolean = False)
-    Dim sourceFile As String
-    Dim wbSource As Workbook
+Sub FillReszletes(wb As Workbook, folderPath As String)
+    Dim srcFile As String
+    Dim srcWb As Workbook
+    Dim openErr As Long
 
-    sourceFile = FindFile(sourceFolder, "*nemztaj*")
-    If sourceFile = "" Then
-        If Not silent Then MsgBox "Source file for 'Nemzeti TAJ' not found (pattern: *nemztaj*).", vbExclamation
+    srcFile = FindFile(folderPath, "*reszletes*")
+    If srcFile = "" Then
+        Warn "reszletes source not found (pattern: *reszletes*)"
         Exit Sub
     End If
 
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & sourceFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & sourceFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & srcFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open reszletes source: " & srcFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    ' Copy the only sheet into the target workbook at position 1
-    wbSource.Sheets(1).Copy Before:=wb.Sheets(1)
+    ' Teljes lap másolása pos. 1-re (formátumok megőrződnek — szándékos)
+    ' A Copy után az ActiveSheet mindig az újonnan másolt lap — ez a megbízható referencia
+    srcWb.Sheets(1).Copy Before:=wb.Sheets(1)
+    ActiveSheet.Name = "reszletes"
+    ActiveSheet.Range("A1").Select
 
-    ' Rename to exact target name
-    On Error Resume Next
-    wb.Sheets(1).Name = "Nemzeti TAJ"
-    On Error GoTo 0
-
-    wbSource.Close SaveChanges:=False
-
-    If Not silent Then MsgBox "Filled 'Nemzeti TAJ' from: " & sourceFile, vbInformation
+    srcWb.Close SaveChanges:=False
 End Sub
 
-Sub FillReszletes(wb As Workbook, sourceFolder As String, Optional silent As Boolean = False)
-    Dim sourceFile As String
-    Dim wbSource As Workbook
+Sub FillNemzetiTAJ(wb As Workbook, folderPath As String)
+    Dim srcFile As String
+    Dim srcWb As Workbook
+    Dim openErr As Long
 
-    sourceFile = FindFile(sourceFolder, "*reszletes*")
-    If sourceFile = "" Then
-        If Not silent Then MsgBox "Source file for 'reszletes' not found (pattern: *reszletes*).", vbExclamation
+    srcFile = FindFile(folderPath, "*nemztaj*")
+    If srcFile = "" Then
+        Warn "Nemzeti TAJ source not found (pattern: *nemztaj*)"
         Exit Sub
     End If
 
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & sourceFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & sourceFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & srcFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open Nemzeti TAJ source: " & srcFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    ' Copy the only sheet into the target workbook at position 1
-    wbSource.Sheets(1).Copy Before:=wb.Sheets(1)
+    ' Teljes lap másolása pos. 1-re — reszletes pos. 2-re tolódik
+    ' A Copy után az ActiveSheet mindig az újonnan másolt lap — ez a megbízható referencia
+    srcWb.Sheets(1).Copy Before:=wb.Sheets(1)
+    ActiveSheet.Name = "Nemzeti TAJ"
+    ActiveSheet.Range("A1").Select
 
-    ' Rename to exact target name
-    On Error Resume Next
-    wb.Sheets(1).Name = "reszletes"
-    On Error GoTo 0
-
-    wbSource.Close SaveChanges:=False
-
-    If Not silent Then MsgBox "Filled 'reszletes' from: " & sourceFile, vbInformation
+    srcWb.Close SaveChanges:=False
 End Sub
 
-Sub FillVissz(wb As Workbook, sourceFolder As String, Optional silent As Boolean = False)
-    Dim sourceFile As String
-    Dim wbSource As Workbook, wsSource As Worksheet
+Sub FillVissz(wb As Workbook, folderPath As String)
+    Dim srcFile As String
     Dim wsTarget As Worksheet
+    Dim srcWb As Workbook
+    Dim wsSrc As Worksheet
     Dim lastRow As Long
+    Dim openErr As Long
 
-    sourceFile = FindFile(sourceFolder, "vissz_*")
-    If sourceFile = "" Then
-        If Not silent Then MsgBox "Source file for 'vissz' not found (pattern: vissz_*).", vbExclamation
+    srcFile = FindFile(folderPath, "vissz_*")
+    If srcFile = "" Then
+        Warn "vissz source not found (pattern: vissz_*)"
         Exit Sub
     End If
 
@@ -287,150 +368,151 @@ Sub FillVissz(wb As Workbook, sourceFolder As String, Optional silent As Boolean
     Set wsTarget = wb.Worksheets("vissz")
     On Error GoTo 0
     If wsTarget Is Nothing Then
-        If Not silent Then MsgBox "Target sheet 'vissz' not found in workbook.", vbExclamation
+        Warn "vissz sheet not found in template"
         Exit Sub
     End If
 
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & sourceFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & sourceFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & srcFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open vissz source: " & srcFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    Set wsSource = wbSource.Sheets(1)
-    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    Set wsSrc = srcWb.Sheets(1)
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
-    If lastRow >= 1 Then
-        ' Set Text format BEFORE pasting to prevent scientific notation on ID columns
-        wsTarget.Columns(1).NumberFormat = "@"
+    ' Beillesztés értékként (A oszlop szöveg formátum — tudományos jelölés megelőzése)
+    wsTarget.Cells.NumberFormat = "@"
+    wsTarget.Range("A1:AN" & lastRow).Value = wsSrc.Range("A1:AN" & lastRow).Value
 
-        wsSource.Range(wsSource.Cells(1, 1), wsSource.Cells(lastRow, 40)).Copy
-        wsTarget.Range("A1").PasteSpecial xlPasteValues
-        Application.CutCopyMode = False
-    End If
-
-    wbSource.Close SaveChanges:=False
-
-    If Not silent Then MsgBox "Filled 'vissz' from: " & sourceFile & " (" & lastRow & " rows)", vbInformation
+    srcWb.Close SaveChanges:=False
 End Sub
 
-Sub FillXLS(wb As Workbook, sourceFolder As String, Optional silent As Boolean = False)
+Sub FillXLS(wb As Workbook, folderPath As String)
     Dim wsTarget As Worksheet
-    Dim wbSource As Workbook, wsSource As Worksheet
-    Dim lastRow As Long, targetLastRow As Long
+    Dim allFiles() As String
+    Dim fileCount As Long
+    Dim titkosFile As String
+    Dim srcWb As Workbook
+    Dim wsSrc As Worksheet
+    Dim lastRow As Long
+    Dim destRow As Long
+    Dim rowCount As Long
+    Dim openErr As Long
     Dim baseName As String
+    Dim dotPos As Long
+    Dim f As String
+    Dim j As Long
 
     On Error Resume Next
     Set wsTarget = wb.Worksheets("xls")
     On Error GoTo 0
     If wsTarget Is Nothing Then
-        If Not silent Then MsgBox "Target sheet 'xls' not found in workbook.", vbExclamation
+        Warn "xls sheet not found in template"
         Exit Sub
     End If
 
-    ' --- Collect all xls_ filenames into array first (avoids Dir state issues) ---
-    Dim xlsFiles() As String
-    Dim xlsCount As Integer
-    xlsCount = 0
-    Dim fileName As String
+    ' Összes xls_* fájl összegyűjtése
+    fileCount = 0
+    ReDim allFiles(0)
 
-    fileName = Dir(sourceFolder & "xls_*")
-    Do While fileName <> ""
-        If Left(fileName, 1) <> "~" Then
-            ReDim Preserve xlsFiles(xlsCount)
-            xlsFiles(xlsCount) = fileName
-            xlsCount = xlsCount + 1
+    f = Dir(folderPath & "xls_*")
+    Do While f <> ""
+        If Left(f, 1) <> "~" Then
+            ReDim Preserve allFiles(fileCount)
+            allFiles(fileCount) = f
+            fileCount = fileCount + 1
         End If
-        fileName = Dir
+        f = Dir()
     Loop
 
-    If xlsCount = 0 Then
-        If Not silent Then MsgBox "No xls_ source files found.", vbExclamation
+    If fileCount = 0 Then
+        Warn "No xls_* files found"
         Exit Sub
     End If
 
-    ' --- Identify main file: ends with TITKOS before extension ---
-    Dim mainFile As String
-    mainFile = ""
-    Dim k As Integer
-    For k = 0 To xlsCount - 1
-        baseName = Left(xlsFiles(k), InStrRev(xlsFiles(k), ".") - 1)
-        If Right(UCase(baseName), 6) = "TITKOS" Then
-            mainFile = xlsFiles(k)
+    ' TITKOS (fő) fájl azonosítása — alapnév "TITKOS"-ra végződik
+    titkosFile = ""
+    For j = 0 To fileCount - 1
+        dotPos = InStrRev(allFiles(j), ".")
+        If dotPos > 0 Then
+            baseName = Left(allFiles(j), dotPos - 1)
+        Else
+            baseName = allFiles(j)
+        End If
+        If UCase(Right(baseName, 6)) = "TITKOS" Then
+            titkosFile = allFiles(j)
             Exit For
         End If
-    Next k
+    Next j
 
-    If mainFile = "" Then
-        If Not silent Then MsgBox "Main xls_ source file (base name ending with TITKOS) not found.", vbExclamation
+    If titkosFile = "" Then
+        Warn "Main xls file not found (basename must end with TITKOS)"
         Exit Sub
     End If
 
-    ' --- Process main file (A2:AX, paste to target A1) ---
+    wsTarget.Cells.NumberFormat = "@"
+    destRow = 1
+
+    ' Fő fájl feldolgozása: 2. sortól, 50 oszlop (A:AX) → cél A1-től
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & mainFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & mainFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & titkosFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open main xls file: " & titkosFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    Set wsSource = wbSource.Sheets(1)
-    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    Set wsSrc = srcWb.Sheets(1)
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
     If lastRow >= 2 Then
-        wsSource.Range(wsSource.Cells(2, 1), wsSource.Cells(lastRow, 50)).Copy
-        wsTarget.Range("A1").PasteSpecial xlPasteValues
-        Application.CutCopyMode = False
+        rowCount = lastRow - 1
+        wsTarget.Range("A1").Resize(rowCount, 50).Value = wsSrc.Range("A2").Resize(rowCount, 50).Value
+        destRow = rowCount + 1
     End If
 
-    wbSource.Close SaveChanges:=False
+    srcWb.Close SaveChanges:=False
 
-    ' --- Process secondary xls_ files (A3:AX, append in red) ---
-    For k = 0 To xlsCount - 1
-        If xlsFiles(k) <> mainFile Then
+    ' Másodlagos fájlok: 3. sortól (1=cím, 2=fejléc, 3+=adat), piros betűszín
+    For j = 0 To fileCount - 1
+        If allFiles(j) <> titkosFile Then
             On Error Resume Next
-            Set wbSource = Workbooks.Open(sourceFolder & xlsFiles(k), ReadOnly:=True, UpdateLinks:=False)
-            If Err.Number = 0 Then
-                Set wsSource = wbSource.Sheets(1)
-                lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
-
-                If lastRow >= 3 Then
-                    ' Find next empty row in target
-                    targetLastRow = wsTarget.Cells(wsTarget.Rows.Count, 1).End(xlUp).Row + 1
-
-                    wsSource.Range(wsSource.Cells(3, 1), wsSource.Cells(lastRow, 50)).Copy
-                    wsTarget.Cells(targetLastRow, 1).PasteSpecial xlPasteValues
-                    Application.CutCopyMode = False
-
-                    ' Apply red font to the newly pasted rows
-                    Dim newLastRow As Long
-                    newLastRow = wsTarget.Cells(wsTarget.Rows.Count, 1).End(xlUp).Row
-                    wsTarget.Range(wsTarget.Cells(targetLastRow, 1), wsTarget.Cells(newLastRow, 50)).Font.Color = RGB(255, 0, 0)
-                End If
-
-                wbSource.Close SaveChanges:=False
-            End If
+            Set srcWb = Workbooks.Open(folderPath & allFiles(j), ReadOnly:=True, UpdateLinks:=False)
+            openErr = Err.Number
             On Error GoTo 0
+            If openErr <> 0 Or srcWb Is Nothing Then
+                Warn "Could not open secondary xls file: " & allFiles(j)
+            Else
+                Set wsSrc = srcWb.Sheets(1)
+                lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
+                If lastRow >= 3 Then
+                    rowCount = lastRow - 2
+                    wsTarget.Cells(destRow, 1).Resize(rowCount, 50).Value = wsSrc.Range("A3").Resize(rowCount, 50).Value
+                    wsTarget.Cells(destRow, 1).Resize(rowCount, 50).Font.Color = RGB(255, 0, 0)
+                    destRow = destRow + rowCount
+                End If
+                srcWb.Close SaveChanges:=False
+            End If
         End If
-    Next k
-
-    If Not silent Then MsgBox "Filled 'xls' sheet. Main: " & mainFile & ", secondary files: " & (xlsCount - 1), vbInformation
+    Next j
 End Sub
 
-Sub FillTsz(wb As Workbook, sourceFolder As String, Optional silent As Boolean = False)
-    Dim sourceFile As String
-    Dim wbSource As Workbook, wsSource As Worksheet
+Sub FillTsz(wb As Workbook, folderPath As String)
+    Dim srcFile As String
     Dim wsTarget As Worksheet
+    Dim srcWb As Workbook
+    Dim wsSrc As Worksheet
     Dim lastRow As Long
+    Dim openErr As Long
 
-    sourceFile = FindFile(sourceFolder, "tsz_*")
-    If sourceFile = "" Then
-        If Not silent Then MsgBox "Source file for 'tsz' not found (pattern: tsz_*).", vbExclamation
+    srcFile = FindFile(folderPath, "tsz_*")
+    If srcFile = "" Then
+        Warn "tsz source not found (pattern: tsz_*)"
         Exit Sub
     End If
 
@@ -438,48 +520,54 @@ Sub FillTsz(wb As Workbook, sourceFolder As String, Optional silent As Boolean =
     Set wsTarget = wb.Worksheets("tsz")
     On Error GoTo 0
     If wsTarget Is Nothing Then
-        If Not silent Then MsgBox "Target sheet 'tsz' not found in workbook.", vbExclamation
+        Warn "tsz sheet not found in template"
         Exit Sub
     End If
 
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & sourceFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & sourceFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & srcFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open tsz source: " & srcFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    Set wsSource = wbSource.Sheets(1)
-    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    Set wsSrc = GetFirstVisibleSheet(srcWb)
+    If wsSrc Is Nothing Then
+        srcWb.Close SaveChanges:=False
+        Warn "tsz source has no visible sheet: " & srcFile
+        Exit Sub
+    End If
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
+    wsTarget.Cells.NumberFormat = "@"
     If lastRow >= 2 Then
-        ' Set Text format BEFORE pasting to prevent scientific notation on ID columns
-        wsTarget.Columns(1).NumberFormat = "@"
-
-        wsSource.Range(wsSource.Cells(2, 1), wsSource.Cells(lastRow, 22)).Copy
-        wsTarget.Range("A1").PasteSpecial xlPasteValues
-        Application.CutCopyMode = False
+        wsTarget.Range("A1").Resize(lastRow - 1, 22).Value = wsSrc.Range("A2").Resize(lastRow - 1, 22).Value
     End If
 
-    wbSource.Close SaveChanges:=False
-
-    If Not silent Then MsgBox "Filled 'tsz' from: " & sourceFile & " (" & (lastRow - 1) & " data rows)", vbInformation
+    srcWb.Close SaveChanges:=False
 End Sub
 
-Sub FillRegiTsz(wb As Workbook, sourceFolder As String, yy As Integer, mm As Integer, Optional silent As Boolean = False)
-    Dim sourceFile As String
-    Dim wbSource As Workbook, wsSource As Worksheet
+Sub FillRegiTsz(wb As Workbook, folderPath As String, period As String)
+    ' AutoFilter helyett manuális sorkiválasztás InStr-rel
+    ' → kezeli a kis/nagybetű különbséget (v2601, V2601, stb.)
+    Dim srcFile As String
     Dim wsTarget As Worksheet
+    Dim srcWb As Workbook
+    Dim wsSrc As Worksheet
     Dim lastRow As Long
-    Dim filterValues(1 To 4) As String
-    Dim prevYY As Integer, prevMM As Integer
-    Dim step As Integer
+    Dim openErr As Long
+    Dim prev4() As String
+    Dim destRow As Long
+    Dim i As Long
+    Dim k As Integer
+    Dim cellVal As String
+    Dim matched As Boolean
 
-    sourceFile = FindFileEndsWith(sourceFolder, "_tsz")
-    If sourceFile = "" Then
-        If Not silent Then MsgBox "Source file for 'regi_tsz' not found (pattern: *_tsz.xls*).", vbExclamation
+    srcFile = FindFileEndsWith(folderPath, "_tsz")
+    If srcFile = "" Then
+        Warn "regi_tsz source not found (pattern: *_tsz.xls*)"
         Exit Sub
     End If
 
@@ -487,84 +575,67 @@ Sub FillRegiTsz(wb As Workbook, sourceFolder As String, yy As Integer, mm As Int
     Set wsTarget = wb.Worksheets("regi_tsz_utolsó4honap")
     On Error GoTo 0
     If wsTarget Is Nothing Then
-        If Not silent Then MsgBox "Target sheet 'regi_tsz_utolsó4honap' not found in workbook.", vbExclamation
+        Warn "regi_tsz_utolsó4honap sheet not found in template"
         Exit Sub
     End If
-
-    ' Build the 4 previous vyymm filter values
-    For step = 1 To 4
-        prevMM = mm - step
-        prevYY = yy
-        If prevMM <= 0 Then
-            prevMM = prevMM + 12
-            prevYY = yy - 1
-        End If
-        filterValues(step) = "v" & Format(prevYY, "00") & Format(prevMM, "00")
-    Next step
 
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & sourceFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & sourceFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & srcFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open regi_tsz source: " & srcFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    Set wsSource = wbSource.Sheets(1)
-    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    Set wsSrc = GetFirstVisibleSheet(srcWb)
+    If wsSrc Is Nothing Then
+        srcWb.Close SaveChanges:=False
+        Warn "regi_tsz source has no visible sheet: " & srcFile
+        Exit Sub
+    End If
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
-    If lastRow >= 2 Then
-        ' Clear any existing filter on source before applying ours
-        wsSource.AutoFilterMode = False
+    prev4 = GetPrev4Months(period)
 
-        ' Filter column P (16) for the 4 previous months
-        wsSource.Range(wsSource.Cells(1, 1), wsSource.Cells(lastRow, 23)).AutoFilter _
-            Field:=16, _
-            Criteria1:=Array(filterValues(1), filterValues(2), filterValues(3), filterValues(4)), _
-            Operator:=xlFilterValues
+    ' NumberFormat csak az adatsorokra (2. sortól) — fejléc kizárva, hogy ne reseteljük a sormagasságot
+    wsTarget.Rows("2:" & wsTarget.Rows.Count).NumberFormat = "@"
 
-        ' Set Text format BEFORE pasting to prevent scientific notation on ID columns
-        wsTarget.Columns(1).NumberFormat = "@"
+    ' Fejléc sor másolása értékként (A:W = 23 oszlop)
+    wsTarget.Cells(1, 1).Resize(1, 23).Value = wsSrc.Cells(1, 1).Resize(1, 23).Value
+    wsTarget.Rows(1).WrapText = False
 
-        ' Copy visible rows only (header row + filtered data rows)
-        Dim visibleRange As Range
-        On Error Resume Next
-        Set visibleRange = wsSource.Range(wsSource.Cells(1, 1), wsSource.Cells(lastRow, 23)).SpecialCells(xlCellTypeVisible)
-        On Error GoTo 0
-
-        If Not visibleRange Is Nothing Then
-            visibleRange.Copy
-            wsTarget.Range("A1").PasteSpecial xlPasteValues
-            Application.CutCopyMode = False
+    ' Adatsorok szűrése: S oszlop (19.) tartalmazza-e bármelyik YYMM kódot
+    destRow = 2
+    For i = 2 To lastRow
+        cellVal = CStr(wsSrc.Cells(i, 19).Value)
+        matched = False
+        For k = 0 To 3
+            If InStr(1, cellVal, prev4(k), vbTextCompare) > 0 Then
+                matched = True
+                Exit For
+            End If
+        Next k
+        If matched Then
+            wsTarget.Cells(destRow, 1).Resize(1, 23).Value = wsSrc.Cells(i, 1).Resize(1, 23).Value
+            destRow = destRow + 1
         End If
+    Next i
 
-        ' Remove filter from source before closing
-        wsSource.AutoFilterMode = False
-    End If
-
-    wbSource.Close SaveChanges:=False
-
-    If Not silent Then
-        MsgBox "Filled 'regi_tsz_utolsó4honap' from: " & sourceFile & vbCrLf & _
-               "Filter applied: " & filterValues(1) & ", " & filterValues(2) & ", " & _
-               filterValues(3) & ", " & filterValues(4), vbInformation
-    End If
+    srcWb.Close SaveChanges:=False
 End Sub
 
-Sub FillUtolagos(wb As Workbook, sourceFolder As String, yy As Integer, mm As Integer, Optional silent As Boolean = False)
-    Dim sourceFile As String
-    Dim wbSource As Workbook, wsSource As Worksheet
+Sub FillUtolagos(wb As Workbook, folderPath As String, period As String)
+    Dim srcFile As String
     Dim wsTarget As Worksheet
+    Dim srcWb As Workbook
+    Dim wsSrc As Worksheet
     Dim lastRow As Long
-    Dim periodStr As String
+    Dim openErr As Long
 
-    ' Build the period suffix to match in filename
-    periodStr = "_v" & Format(yy, "00") & Format(mm, "00")
-
-    sourceFile = FindUtolagosFile(sourceFolder, periodStr)
-    If sourceFile = "" Then
-        If Not silent Then MsgBox "Source file for 'utólagos' not found (not p_*, ending with " & periodStr & ").", vbExclamation
+    srcFile = FindUtolagosFile(folderPath, period)
+    If srcFile = "" Then
+        Warn "utólagos source not found (not p_*, ending with _" & period & ")"
         Exit Sub
     End If
 
@@ -572,86 +643,146 @@ Sub FillUtolagos(wb As Workbook, sourceFolder As String, yy As Integer, mm As In
     Set wsTarget = wb.Worksheets("utólagos")
     On Error GoTo 0
     If wsTarget Is Nothing Then
-        If Not silent Then MsgBox "Target sheet 'utólagos' not found in workbook.", vbExclamation
+        Warn "utólagos sheet not found in template"
         Exit Sub
     End If
 
     On Error Resume Next
-    Set wbSource = Workbooks.Open(sourceFolder & sourceFile, ReadOnly:=True, UpdateLinks:=False)
-    If Err.Number <> 0 Then
-        If Not silent Then MsgBox "Could not open: " & sourceFile, vbExclamation
-        On Error GoTo 0
+    Set srcWb = Workbooks.Open(folderPath & srcFile, ReadOnly:=True, UpdateLinks:=False)
+    openErr = Err.Number
+    On Error GoTo 0
+    If openErr <> 0 Or srcWb Is Nothing Then
+        Warn "Could not open utólagos source: " & srcFile
         Exit Sub
     End If
-    On Error GoTo 0
 
-    Set wsSource = wbSource.Sheets(1)
-    lastRow = wsSource.Cells(wsSource.Rows.Count, 1).End(xlUp).Row
+    Set wsSrc = srcWb.Sheets(1)
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
+    wsTarget.Cells.NumberFormat = "@"
     If lastRow >= 2 Then
-        ' Set Text format BEFORE pasting to prevent scientific notation on TAJ numbers
-        wsTarget.Columns(1).NumberFormat = "@"
-
-        wsSource.Range(wsSource.Cells(2, 1), wsSource.Cells(lastRow, 15)).Copy
-        wsTarget.Range("A1").PasteSpecial xlPasteValues
-        Application.CutCopyMode = False
+        wsTarget.Range("A1").Resize(lastRow - 1, 15).Value = wsSrc.Range("A2").Resize(lastRow - 1, 15).Value
     End If
 
-    wbSource.Close SaveChanges:=False
-
-    If Not silent Then MsgBox "Filled 'utólagos' from: " & sourceFile & " (" & (lastRow - 1) & " rows)", vbInformation
+    srcWb.Close SaveChanges:=False
 End Sub
 
+
 ' ============================================
-' HELPER FUNCTIONS
+' SEGÉDFÜGGVÉNYEK
 ' ============================================
 
-Private Function FindFile(folderPath As String, pattern As String) As String
-    ' Returns first matching filename (skipping temp files) or empty string.
-    Dim fileName As String
-    fileName = Dir(folderPath & pattern)
-    Do While fileName <> ""
-        If Left(fileName, 1) <> "~" Then
-            FindFile = fileName
+Function FindFile(folderPath As String, pattern As String) As String
+    Dim f As String
+    f = Dir(folderPath & pattern)
+    Do While f <> ""
+        If Left(f, 1) <> "~" Then
+            FindFile = f
             Exit Function
         End If
-        fileName = Dir
+        f = Dir()
     Loop
     FindFile = ""
 End Function
 
-Private Function FindFileEndsWith(folderPath As String, suffix As String) As String
-    ' Returns first xls* file whose base name (without extension) ends with suffix.
-    ' Skips temp files.
-    Dim fileName As String, baseName As String
-    fileName = Dir(folderPath & "*.xls*")
-    Do While fileName <> ""
-        If Left(fileName, 1) <> "~" Then
-            baseName = Left(fileName, InStrRev(fileName, ".") - 1)
-            If Right(LCase(baseName), Len(suffix)) = LCase(suffix) Then
-                FindFileEndsWith = fileName
+Function FindFileEndsWith(folderPath As String, suffix As String) As String
+    Dim f As String
+    Dim baseName As String
+    Dim dotPos As Long
+
+    f = Dir(folderPath & "*.xls*")
+    Do While f <> ""
+        If Left(f, 1) <> "~" Then
+            dotPos = InStrRev(f, ".")
+            If dotPos > 0 Then
+                baseName = Left(f, dotPos - 1)
+            Else
+                baseName = f
+            End If
+            If UCase(Right(baseName, Len(suffix))) = UCase(suffix) Then
+                FindFileEndsWith = f
                 Exit Function
             End If
         End If
-        fileName = Dir
+        f = Dir()
     Loop
     FindFileEndsWith = ""
 End Function
 
-Private Function FindUtolagosFile(folderPath As String, periodStr As String) As String
-    ' Returns the xls* file that does NOT start with p_ and whose base name ends with periodStr.
-    ' Skips temp files.
-    Dim fileName As String, baseName As String
-    fileName = Dir(folderPath & "*.xls*")
-    Do While fileName <> ""
-        If Left(fileName, 1) <> "~" And Left(LCase(fileName), 2) <> "p_" Then
-            baseName = Left(fileName, InStrRev(fileName, ".") - 1)
-            If Right(LCase(baseName), Len(periodStr)) = LCase(periodStr) Then
-                FindUtolagosFile = fileName
+Function FindUtolagosFile(folderPath As String, period As String) As String
+    ' Keres: *.xls*, nem kezdődik p_-vel, alapneve _vYYMM-re végződik
+    Dim yymm As String
+    Dim suffix As String
+    Dim f As String
+    Dim baseName As String
+    Dim dotPos As Long
+
+    yymm = Mid(period, 2)       ' "v2602" → "2602"
+    suffix = "_v" & yymm        ' "_v2602"
+
+    f = Dir(folderPath & "*.xls*")
+    Do While f <> ""
+        If Left(f, 1) <> "~" And Left(f, 2) <> "p_" Then
+            dotPos = InStrRev(f, ".")
+            If dotPos > 0 Then
+                baseName = Left(f, dotPos - 1)
+            Else
+                baseName = f
+            End If
+            If Right(baseName, Len(suffix)) = suffix Then
+                FindUtolagosFile = f
                 Exit Function
             End If
         End If
-        fileName = Dir
+        f = Dir()
     Loop
     FindUtolagosFile = ""
+End Function
+
+Function GetFirstVisibleSheet(wb As Workbook) As Worksheet
+    Dim j As Integer
+    For j = 1 To wb.Worksheets.Count
+        If wb.Worksheets(j).Visible = xlSheetVisible Then
+            Set GetFirstVisibleSheet = wb.Worksheets(j)
+            Exit Function
+        End If
+    Next j
+    Set GetFirstVisibleSheet = Nothing
+End Function
+
+Private Sub Warn(msg As String)
+    g_warnings = g_warnings & "    WARN: " & msg & vbCrLf
+End Sub
+
+Private Function FolderDisplayName(folderPath As String) As String
+    Dim p As String
+    p = folderPath
+    If Right(p, 1) = "\" Then p = Left(p, Len(p) - 1)
+    FolderDisplayName = Mid(p, InStrRev(p, "\") + 1)
+End Function
+
+Function WriteLogFile(parentFolder As String, period As String, _
+                      logLines() As String, lineCount As Long, _
+                      okCount As Long, errCount As Long) As String
+    Dim logPath As String
+    Dim fileNum As Integer
+    Dim i As Long
+
+    logPath = parentFolder & "preprocess_log_" & Format(Now, "YYYYMMDD_HHMMSS") & ".txt"
+
+    fileNum = FreeFile
+    Open logPath For Output As #fileNum
+    Print #fileNum, "Pre-Process Log"
+    Print #fileNum, "Date: " & Format(Now, "DD/MM/YYYY HH:MM:SS")
+    Print #fileNum, "Period: " & period
+    Print #fileNum, String(50, "-")
+    For i = 0 To lineCount - 1
+        Print #fileNum, logLines(i)
+    Next i
+    Print #fileNum, String(50, "-")
+    Print #fileNum, "Processed: " & okCount
+    Print #fileNum, "Errors:    " & errCount
+    Close #fileNum
+
+    WriteLogFile = logPath
 End Function
