@@ -384,9 +384,10 @@ Sub FillVissz(wb As Workbook, folderPath As String)
     Set wsSrc = srcWb.Sheets(1)
     lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
-    ' Beillesztés értékként (A oszlop szöveg formátum — tudományos jelölés megelőzése)
-    wsTarget.Cells.NumberFormat = "@"
+    ' NumberFormat csak az adatsorokra (2. sortól) — fejléc kizárva, hogy ne reseteljük a sormagasságot
+    wsTarget.Rows("2:" & wsTarget.Rows.Count).NumberFormat = "@"
     wsTarget.Range("A1:AN" & lastRow).Value = wsSrc.Range("A1:AN" & lastRow).Value
+    wsTarget.Rows(1).WrapText = False
 
     srcWb.Close SaveChanges:=False
 End Sub
