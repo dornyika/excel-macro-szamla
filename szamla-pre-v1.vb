@@ -1,6 +1,6 @@
 ' ============================================
 ' SZAMLA PRE-PROCESS - VERSION 1
-' Last Updated: 2026-03-07
+' Last Updated: 2026-03-08
 ' Futtatási sorrend: ELŐBB fut, mint a szamla-v107.vb
 ' Célja: a sablonfájlt (TARGET_FILENAME) feltölti forrásfájlokból,
 '        almappánként feldolgozva a kiválasztott szülőmappa alatti könyvtárakat.
@@ -48,6 +48,10 @@ Sub RunPreProcess_BatchFolders()
     Dim candidate As String
     Dim openErrNum As Long
     Dim openErrDesc As String
+    Dim newName As String
+    Dim saveErrNum As Long
+    Dim saveErrDesc As String
+    Dim startTime As Double
 
     ' --- 1. lépés: Időszak bekérése ---
     period = GetPeriodInput()
@@ -75,12 +79,14 @@ Sub RunPreProcess_BatchFolders()
     Set parentFolderObj = fso.GetFolder(parentFolder)
 
     For Each subFolderItem In parentFolderObj.SubFolders
-        candidate = subFolderItem.Path
-        If Right(candidate, 1) <> "\" Then candidate = candidate & "\"
-        If Dir(candidate & TARGET_FILENAME) <> "" Then
-            ReDim Preserve subFolders(subFolderCount)
-            subFolders(subFolderCount) = candidate
-            subFolderCount = subFolderCount + 1
+        If Right(subFolderItem.Name, 6) <> "-nincs" Then
+            candidate = subFolderItem.Path
+            If Right(candidate, 1) <> "\" Then candidate = candidate & "\"
+            If Dir(candidate & TARGET_FILENAME) <> "" Then
+                ReDim Preserve subFolders(subFolderCount)
+                subFolders(subFolderCount) = candidate
+                subFolderCount = subFolderCount + 1
+            End If
         End If
     Next subFolderItem
 
@@ -105,6 +111,8 @@ Sub RunPreProcess_BatchFolders()
     If MsgBox(confirmMsg, vbYesNo + vbQuestion, "Megerősítés") = vbNo Then Exit Sub
 
     ' --- 5. lépés: Teljesítményoptimalizálás ---
+    On Error GoTo FatalError
+    Application.Interactive = False
     Application.ScreenUpdating = False
     Application.Calculation = xlCalculationManual
     Application.EnableEvents = False
@@ -112,6 +120,7 @@ Sub RunPreProcess_BatchFolders()
     Application.DisplayStatusBar = True
 
     ' --- 6. lépés: Almappák feldolgozása ---
+    startTime = Timer
     ReDim logLines(subFolderCount - 1)
     okCount = 0
     errCount = 0
@@ -151,15 +160,29 @@ Sub RunPreProcess_BatchFolders()
             errCount = errCount + 1
             logLines(i) = "[ERROR] " & displayName & " - ERROR:" & Mid(result, 8)
         Else
+            newName = displayName & "_" & period & ".xlsx"
             On Error Resume Next
             wb.Save
+            saveErrNum = Err.Number
+            saveErrDesc = Err.Description
             wb.Close SaveChanges:=False
+            If saveErrNum = 0 Then
+                If Dir(folderPath & newName) <> "" Then Kill folderPath & newName
+                Name folderPath & TARGET_FILENAME As folderPath & newName
+                saveErrNum = Err.Number
+                saveErrDesc = Err.Description
+            End If
             On Error GoTo 0
-            okCount = okCount + 1
-            If result = "[OK]" Then
-                logLines(i) = "[OK]    " & displayName
+            If saveErrNum <> 0 Then
+                errCount = errCount + 1
+                logLines(i) = "[ERROR] " & displayName & " - SAVE ERROR:" & saveErrNum & " " & saveErrDesc
             Else
-                logLines(i) = "[WARN]  " & displayName & vbCrLf & g_warnings
+                okCount = okCount + 1
+                If result = "[OK]" Then
+                    logLines(i) = "[OK]    " & displayName
+                Else
+                    logLines(i) = "[WARN]  " & displayName & vbCrLf & g_warnings
+                End If
             End If
         End If
 
@@ -173,18 +196,33 @@ Sub RunPreProcess_BatchFolders()
     Next i
 
     ' --- 7. lépés: Végleges visszaállítás, napló, összegzés ---
+    Application.Interactive = True
     Application.StatusBar = False
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
     Application.EnableEvents = True
     Application.DisplayAlerts = True
 
-    logPath = WriteLogFile(parentFolder, period, logLines, subFolderCount, okCount, errCount)
+    logPath = WriteLogFile(parentFolder, period, logLines, subFolderCount, okCount, errCount, Timer - startTime)
 
     MsgBox "Feldolgozás kész!" & vbCrLf & vbCrLf & _
            "Feldolgozva: " & okCount & vbCrLf & _
            "Hibák: " & errCount & vbCrLf & vbCrLf & _
            "Napló: " & logPath, vbInformation
+    Exit Sub
+
+FatalError:
+    Application.Interactive = True
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.DisplayAlerts = True
+    On Error Resume Next
+    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
+    MsgBox "Váratlan hiba a feldolgozás során:" & vbCrLf & _
+           Err.Number & " - " & Err.Description, vbCritical, "Hiba"
 End Sub
 
 
@@ -730,7 +768,7 @@ Function FindUtolagosFile(folderPath As String, period As String) As String
             Else
                 baseName = f
             End If
-            If Right(baseName, Len(suffix)) = suffix Then
+            If UCase(Right(baseName, Len(suffix))) = UCase(suffix) Then
                 FindUtolagosFile = f
                 Exit Function
             End If
@@ -764,7 +802,8 @@ End Function
 
 Function WriteLogFile(parentFolder As String, period As String, _
                       logLines() As String, lineCount As Long, _
-                      okCount As Long, errCount As Long) As String
+                      okCount As Long, errCount As Long, _
+                      elapsedSec As Double) As String
     Dim logPath As String
     Dim fileNum As Integer
     Dim i As Long
@@ -783,6 +822,7 @@ Function WriteLogFile(parentFolder As String, period As String, _
     Print #fileNum, String(50, "-")
     Print #fileNum, "Processed: " & okCount
     Print #fileNum, "Errors:    " & errCount
+    Print #fileNum, "Duration:  " & Format(elapsedSec, "0.0") & "s"
     Close #fileNum
 
     WriteLogFile = logPath
