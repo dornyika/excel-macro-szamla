@@ -12,13 +12,13 @@ A script a `Personal.xlsb`-be kerül, és a `Run_PreProcess_Batch` nevű makróv
 
 1. **Periódus megadása** — két InputBox: 2 jegyű év (pl. `26`), majd hónap (1–12). Ebből lesz a perióduskód, pl. `v2602`.
 2. **Szülőmappa kiválasztása** — mappapicker dialógus. Az almappáit fogja végigpásztázni.
-3. **Almappák szűrése** — csak azok az almappák kerülnek feldolgozásra, amelyek tartalmazzák a sablonfájlt.
+3. **Almappák szűrése** — csak azok az almappák kerülnek feldolgozásra, amelyek tartalmazzák a sablonfájlt, és amelyek neve **nem** végződik `-nincs`-re. A feldolgozás sorrendje ABC (almappa neve szerint).
 4. **Megerősítés** — megmutatja: hány almappa, melyik periódus, és a `regi_tsz` szűrésnél melyik 4 YYMM kódot keresi az S oszlopban.
 5. **Batch feldolgozás** — almappánként:
    - Megnyitja a sablonfájlt
    - Feltölti a 7 munkalapot forrásfájlokból
-   - Menti és zárja a fájlt
-   - Naplózza az eredményt: `[OK]`, `[WARN]` (ha valamely forrásfájl hiányzott), vagy `[ERROR]` (futási hiba — a fájl nem kerül mentésre)
+   - Menti, majd **átnevezi** a sablonfájlt: `[almappa neve]_vYYMM.xlsx` (pl. `Arpad_v2602.xlsx`) — azonos nevű meglévő fájlt felülírja
+   - Naplózza az eredményt: `[OK]`, `[WARN]` (ha valamely forrásfájl hiányzott), vagy `[ERROR]` (futási hiba — a fájl nem kerül mentésre, nem lesz átnevezve)
 6. **Napló** — a szülőmappában létrehoz egy `preprocess_log_YYYYMMDD_HHMMSS.txt` fájlt.
 7. **Összegzés** — MsgBox: hány sikerült, hány hibás, a naplófájl elérési útja.
 
@@ -72,6 +72,7 @@ Period: v2602
 --------------------------------------------------
 Processed: 2
 Errors:    1
+Duration:  1:23
 ```
 
 - `[OK]` — minden forrásfájl megtalálva, feltöltés sikeres
@@ -83,6 +84,7 @@ Errors:    1
 ## Technikai megjegyzések
 
 - A script `Personal.xlsb`-be kerül, `SzamlaPreProcess` modul névvel.
-- Batch futás közben `ScreenUpdating`, `Calculation`, `EnableEvents`, `DisplayAlerts` ki van kapcsolva a gyorsabb futásért — mentés előtt minden visszaállítódik.
+- Batch futás közben `ScreenUpdating`, `Calculation`, `EnableEvents`, `DisplayAlerts` és `Interactive` ki van kapcsolva — mentés előtt minden visszaállítódik. Az `Interactive = False` megakadályozza, hogy véletlen kattintás vagy gépelés megzavarja a futást.
+- Váratlan hiba esetén (`FatalError` ág) az összes beállítás garantáltan visszaáll, a nyitott munkafüzet bezárul.
 - Egymásba ágyazott `Dir()` helyett `FileSystemObject`-et használ az almappák iterálásához.
 - Forrásworkbookok `ReadOnly:=True` módban nyílnak meg.

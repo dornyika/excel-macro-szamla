@@ -93,6 +93,22 @@ Sub RunPreProcess_BatchFolders()
     Set parentFolderObj = Nothing
     Set fso = Nothing
 
+    ' Almappák rendezése ABC sorrendbe (bubble sort)
+    Dim sortSwapped As Boolean
+    Dim sortTemp As String
+    Dim s As Long
+    Do
+        sortSwapped = False
+        For s = 0 To subFolderCount - 2
+            If LCase(FolderDisplayName(subFolders(s))) > LCase(FolderDisplayName(subFolders(s + 1))) Then
+                sortTemp = subFolders(s)
+                subFolders(s) = subFolders(s + 1)
+                subFolders(s + 1) = sortTemp
+                sortSwapped = True
+            End If
+        Next s
+    Loop While sortSwapped
+
     If subFolderCount = 0 Then
         MsgBox "Nem található '" & TARGET_FILENAME & "' fájlt tartalmazó almappa.", vbExclamation
         Exit Sub
@@ -822,7 +838,7 @@ Function WriteLogFile(parentFolder As String, period As String, _
     Print #fileNum, String(50, "-")
     Print #fileNum, "Processed: " & okCount
     Print #fileNum, "Errors:    " & errCount
-    Print #fileNum, "Duration:  " & Format(elapsedSec, "0.0") & "s"
+    Print #fileNum, "Duration:  " & Int(elapsedSec / 60) & ":" & Format(Int(elapsedSec) Mod 60, "00")
     Close #fileNum
 
     WriteLogFile = logPath
