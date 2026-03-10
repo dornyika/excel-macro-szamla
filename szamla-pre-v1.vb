@@ -588,10 +588,12 @@ Sub FillTsz(wb As Workbook, folderPath As String)
         Exit Sub
     End If
 
-    Set wsSrc = GetFirstVisibleSheet(srcWb)
+    On Error Resume Next
+    Set wsSrc = srcWb.Worksheets("Munka1")
+    On Error GoTo 0
     If wsSrc Is Nothing Then
         srcWb.Close SaveChanges:=False
-        Warn "tsz source has no visible sheet: " & srcFile
+        Warn "tsz source: 'Munka1' sheet not found in " & srcFile
         Exit Sub
     End If
     lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
@@ -643,10 +645,22 @@ Sub FillRegiTsz(wb As Workbook, folderPath As String, period As String)
         Exit Sub
     End If
 
-    Set wsSrc = GetFirstVisibleSheet(srcWb)
+    If srcWb.Worksheets.Count = 1 Then
+        Set wsSrc = srcWb.Worksheets(1)
+    Else
+        Dim rWs As Worksheet
+        Dim rA1 As String
+        For Each rWs In srcWb.Worksheets
+            rA1 = Replace(CStr(rWs.Cells(1, 1).Value), Chr(10), "")
+            If InStr(1, rA1, "Törzs-szám", vbTextCompare) > 0 Then
+                Set wsSrc = rWs
+                Exit For
+            End If
+        Next rWs
+    End If
     If wsSrc Is Nothing Then
         srcWb.Close SaveChanges:=False
-        Warn "regi_tsz source has no visible sheet: " & srcFile
+        Warn "regi_tsz source: matching sheet not found in " & srcFile
         Exit Sub
     End If
     lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
