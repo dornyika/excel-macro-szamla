@@ -42,7 +42,8 @@ A sablon 5 eredeti lapot tartalmaz. A script eléjük másolja a `reszletes` és
 
 - **Nemzeti TAJ és reszletes**: teljes lapmásolás (formátumok megőrződnek).
 - **Összes többi lap**: csak értékek kerülnek át (`.Value = .Value`), nincs formázásmásolás.
-- **tsz és regi_tsz forrásfájlok**: ha a fájlban rejtett lap van az 1. pozícióban (pl. HBCS1608), a script az első **látható** lapot használja (`GetFirstVisibleSheet`).
+- **tsz forrásfájl**: a `Munka1` nevű sheetből olvas.
+- **regi_tsz forrásfájl**: ha csak 1 sheet van, azt használja. Ha több sheet van, az A1 cellájában `Törzs-szám` vagy `Törzs-számok` szöveget tartalmazó sheetet keresi (sortörés és kis/nagybetű figyelmen kívül hagyva).
 - **xls TITKOS fájl**: az alapnevének `TITKOS`-ra kell végződnie (kis/nagybetű mindegy). A többi `xls_*` fájl másodlagos — adatai piros betűszínnel kerülnek be a fő adatok alá.
 - **regi_tsz szűrés**: az S oszlop (19.) értékében keresi az előző 4 hónap YYMM kódjait (pl. `2601`, `2512`), `InStr`-rel — kis/nagybetű-érzéketlen.
 - **NumberFormat**: TAJ-számokat és egyéb hosszú numerikus azonosítókat tartalmazó oszlopok szöveg formátumra (`"@"`) vannak állítva, hogy elkerüljük a tudományos jelölést.
