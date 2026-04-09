@@ -4,7 +4,9 @@
 
 Ez a script a `szamla-v107.vb` előtt fut. Feladata: minden kiválasztott almappában megtalálja a sablonfájlt (`pipalo_v20250827_tol_sablonom.xlsx`), és feltölti adatokkal az adott almappában lévő forrásfájlokból.
 
-A script a `Personal.xlsb`-be kerül, és a `Run_PreProcess_Batch` nevű makróval indítható.
+A script a `Personal.xlsb`-be kerül, és két makróval indítható:
+- `Run_PreProcess_Batch` — teljes batch feldolgozás (összes almappa)
+- `Run_PreProcess_Single` — egymappa-feldolgozás hibakereséshez
 
 ---
 
@@ -82,6 +84,12 @@ Duration:  1:23
 
 ---
 
+## Egymappa-feldolgozás (`Run_PreProcess_Single`)
+
+Hibakereséshez: a felhasználó közvetlenül kiválaszt egy almappát (nem szülőmappát), és csak az kerül feldolgozásra. Ugyanazt a logikát használja, mint a batch — a napló és az eredményüzenet szintén megjelenik. Hálózati probléma gyanúja esetén érdemes először lokálisan futtatni.
+
+---
+
 ## Technikai megjegyzések
 
 - A script `Personal.xlsb`-be kerül, `SzamlaPreProcess` modul névvel.
@@ -89,3 +97,4 @@ Duration:  1:23
 - Váratlan hiba esetén (`FatalError` ág) az összes beállítás garantáltan visszaáll, a nyitott munkafüzet bezárul.
 - Egymásba ágyazott `Dir()` helyett `FileSystemObject`-et használ az almappák iterálásához.
 - Forrásworkbookok `ReadOnly:=True` módban nyílnak meg.
+- `SetForegroundWindow` (Win32 API) gondoskodik arról, hogy az Excel az előtérbe kerüljön a feldolgozás végén (vagy mentési fázisban), így az összegző MsgBox és a hangjelzés nem marad háttérben.

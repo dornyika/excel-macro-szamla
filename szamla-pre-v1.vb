@@ -8,6 +8,8 @@
 
 Option Explicit
 
+Private Declare PtrSafe Function SetForegroundWindow Lib "user32" (ByVal hwnd As LongPtr) As Long
+
 Private Const TARGET_FILENAME As String = "pipalo_v20250827_tol_sablonom.xlsx"
 Private g_warnings As String
 
@@ -18,6 +20,10 @@ Private g_warnings As String
 
 Sub Run_PreProcess_Batch()
     RunPreProcess_BatchFolders
+End Sub
+
+Sub Run_PreProcess_Single()
+    RunPreProcess_SingleFolder
 End Sub
 
 
@@ -167,6 +173,7 @@ Sub RunPreProcess_BatchFolders()
         Application.Calculation = xlCalculationAutomatic
         Application.EnableEvents = True
         Application.DisplayAlerts = True
+        SetForegroundWindow Application.hwnd
         DoEvents
 
         If Left(result, 7) = "[ERROR]" Then
@@ -221,9 +228,176 @@ Sub RunPreProcess_BatchFolders()
 
     logPath = WriteLogFile(parentFolder, period, logLines, subFolderCount, okCount, errCount, Timer - startTime)
 
+    SetForegroundWindow Application.hwnd
     MsgBox "Feldolgozás kész!" & vbCrLf & vbCrLf & _
            "Feldolgozva: " & okCount & vbCrLf & _
            "Hibák: " & errCount & vbCrLf & vbCrLf & _
+           "Napló: " & logPath, vbInformation
+    Exit Sub
+
+FatalError:
+    Application.Interactive = True
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.DisplayAlerts = True
+    On Error Resume Next
+    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
+    MsgBox "Váratlan hiba a feldolgozás során:" & vbCrLf & _
+           Err.Number & " - " & Err.Description, vbCritical, "Hiba"
+End Sub
+
+
+' ============================================
+' EGYMAPPA-FELDOLGOZÁS (hibakereséshez)
+' ============================================
+
+Sub RunPreProcess_SingleFolder()
+    Dim period As String
+    Dim folderPath As String
+    Dim wb As Workbook
+    Dim result As String
+    Dim logLines(0) As String
+    Dim logPath As String
+    Dim prev4() As String
+    Dim prev4Str As String
+    Dim displayName As String
+    Dim confirmMsg As String
+    Dim openErrNum As Long
+    Dim openErrDesc As String
+    Dim newName As String
+    Dim saveErrNum As Long
+    Dim saveErrDesc As String
+    Dim startTime As Double
+    Dim okCount As Long
+    Dim errCount As Long
+
+    okCount = 0
+    errCount = 0
+
+    ' --- 1. lépés: Időszak bekérése ---
+    period = GetPeriodInput()
+    If period = "" Then Exit Sub
+
+    ' --- 2. lépés: Mappa kiválasztása (közvetlenül a sablon mappája) ---
+    With Application.FileDialog(msoFileDialogFolderPicker)
+        .Title = "Válasszon feldolgozandó mappát (közvetlenül a sablon mappája)"
+        .AllowMultiSelect = False
+        If .Show = -1 Then
+            folderPath = .SelectedItems(1)
+        Else
+            MsgBox "Nem választott mappát. Megszakítás.", vbInformation
+            Exit Sub
+        End If
+    End With
+    If Right(folderPath, 1) <> "\" Then folderPath = folderPath & "\"
+
+    ' --- 3. lépés: Sablon ellenőrzése ---
+    If Dir(folderPath & TARGET_FILENAME) = "" Then
+        MsgBox "A kiválasztott mappában nem található: " & TARGET_FILENAME & vbCrLf & vbCrLf & folderPath, _
+               vbExclamation, "Hiba"
+        Exit Sub
+    End If
+
+    ' --- 4. lépés: Megerősítés ---
+    displayName = FolderDisplayName(folderPath)
+    prev4 = GetPrev4Months(period)
+    prev4Str = prev4(0) & ", " & prev4(1) & ", " & prev4(2) & ", " & prev4(3)
+
+    confirmMsg = "Egymappa-feldolgozás:" & vbCrLf & vbCrLf & _
+                 "Mappa: " & displayName & vbCrLf & _
+                 "Periódus: " & period & vbCrLf & _
+                 "regi_tsz szűrés (S oszlop tartalmazza): " & prev4Str & vbCrLf & vbCrLf & _
+                 "Folytatja?"
+
+    If MsgBox(confirmMsg, vbYesNo + vbQuestion, "Megerősítés") = vbNo Then Exit Sub
+
+    ' --- 5. lépés: Teljesítményoptimalizálás ---
+    On Error GoTo FatalError
+    Application.Interactive = False
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    Application.DisplayStatusBar = True
+
+    ' --- 6. lépés: Feldolgozás ---
+    startTime = Timer
+    Application.StatusBar = "Feldolgozás: " & displayName
+    DoEvents
+
+    ' Sablonfájl megnyitása
+    Set wb = Nothing
+    On Error Resume Next
+    Set wb = Workbooks.Open(folderPath & TARGET_FILENAME, ReadOnly:=False, UpdateLinks:=False)
+    openErrNum = Err.Number
+    openErrDesc = Err.Description
+    On Error GoTo 0
+
+    If openErrNum <> 0 Or wb Is Nothing Then
+        result = "[ERROR]:" & openErrNum & " " & openErrDesc
+    Else
+        result = TryFillAllSheets(wb, folderPath, period)
+    End If
+
+    ' KRITIKUS: Beállítások visszaállítása mentés ELŐTT
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.DisplayAlerts = True
+    DoEvents
+
+    If Left(result, 7) = "[ERROR]" Then
+        On Error Resume Next
+        If Not wb Is Nothing Then wb.Close SaveChanges:=False
+        On Error GoTo 0
+        errCount = 1
+        logLines(0) = "[ERROR] " & displayName & " - ERROR:" & Mid(result, 8)
+    Else
+        newName = displayName & "_" & period & ".xlsx"
+        On Error Resume Next
+        wb.Save
+        saveErrNum = Err.Number
+        saveErrDesc = Err.Description
+        wb.Close SaveChanges:=False
+        If saveErrNum = 0 Then
+            If Dir(folderPath & newName) <> "" Then Kill folderPath & newName
+            Name folderPath & TARGET_FILENAME As folderPath & newName
+            saveErrNum = Err.Number
+            saveErrDesc = Err.Description
+        End If
+        On Error GoTo 0
+        If saveErrNum <> 0 Then
+            errCount = 1
+            logLines(0) = "[ERROR] " & displayName & " - SAVE ERROR:" & saveErrNum & " " & saveErrDesc
+        Else
+            okCount = 1
+            If result = "[OK]" Then
+                logLines(0) = "[OK]    " & displayName
+            Else
+                logLines(0) = "[WARN]  " & displayName & vbCrLf & g_warnings
+            End If
+        End If
+    End If
+
+    Set wb = Nothing
+
+    ' --- 7. lépés: Végleges visszaállítás, napló, összegzés ---
+    Application.Interactive = True
+    Application.StatusBar = False
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.DisplayAlerts = True
+
+    Dim parentFolder As String
+    parentFolder = Left(folderPath, InStrRev(folderPath, "\", Len(folderPath) - 1))
+    logPath = WriteLogFile(parentFolder, period, logLines, 1, okCount, errCount, Timer - startTime)
+
+    SetForegroundWindow Application.hwnd
+    MsgBox "Feldolgozás kész!" & vbCrLf & vbCrLf & logLines(0) & vbCrLf & vbCrLf & _
            "Napló: " & logPath, vbInformation
     Exit Sub
 
