@@ -1,9 +1,32 @@
 ' ============================================
 ' SZAMLA PRE-PROCESS - VERSION 1
 ' Last Updated: 2026-03-08
-' Futtatási sorrend: ELŐBB fut, mint a szamla-v107.vb
-' Célja: a sablonfájlt (TARGET_FILENAME) feltölti forrásfájlokból,
-'        almappánként feldolgozva a kiválasztott szülőmappa alatti könyvtárakat.
+' Futtatási sorrend: 1. lépés – ELŐBB fut, mint a szamla.vb
+'
+' MIT CSINÁL:
+'   Almappánként megkeresi a sablonfájlt (TARGET_FILENAME), feltölti
+'   forrásfájlokból, majd átnevezi [mappanév]_[periódus].xlsx formátumra.
+'   A periódust (pl. v2604) futáskor kéri be.
+'
+' MAKRÓ VÁLASZTÓ – BELÉPÉSI PONTOK:
+'   Run_PreProcess_Batch  – szülőmappa összes érvényes almappája egyszerre
+'   Run_PreProcess_Single – egyetlen mappa (hibakereséshez)
+'
+' FORRÁSFÁJL MINTÁK (almappánként):
+'   *reszletes*           → "reszletes" munkalap
+'   *nemztaj*             → "Nemzeti TAJ" munkalap
+'   vissz_*               → "vissz" munkalap
+'   xls_*TITKOS*          → "xls" munkalap (fő); többi xls_* → piros sorként hozzáfűzve
+'   tsz_*                 → "tsz" munkalap
+'   *_tsz.xls*            → "regi_tsz_utolsó4honap" munkalap (előző 4 hónap szűrve)
+'   nem p_* fájl, _vYYMM végű → "utólagos" munkalap
+'
+' AMIT SZÜKSÉG ESETÉN MÓDOSÍTANI KELL:
+'   TARGET_FILENAME (sor 14) – a sablonfájl neve, ha megváltozik
+'   pl. "pipalo_v20250827_tol_sablonom.xlsx" → új sablon esetén ide kell az új név
+'
+' ALMAPPA KIZÁRÁS:
+'   "-nincs" végű almappákat átugorja
 ' ============================================
 
 Option Explicit
@@ -31,7 +54,7 @@ End Sub
 ' FŐFOLYAMAT
 ' ============================================
 
-Sub RunPreProcess_BatchFolders()
+Private Sub RunPreProcess_BatchFolders()
     Dim period As String
     Dim parentFolder As String
     Dim subFolders() As String
@@ -254,7 +277,7 @@ End Sub
 ' EGYMAPPA-FELDOLGOZÁS (hibakereséshez)
 ' ============================================
 
-Sub RunPreProcess_SingleFolder()
+Private Sub RunPreProcess_SingleFolder()
     Dim period As String
     Dim folderPath As String
     Dim wb As Workbook

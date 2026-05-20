@@ -1,18 +1,50 @@
 ' ============================================
-' VBA MACRO COLLECTION - VERSION 107
+' SZAMLA - VERSION 107
 ' Last Updated: 2025-01-11
-' Selective optimization - ON during processing, OFF for save
-' FIX v97: Fixed date format preservation in Utolagos (2025.04 stays as 2025.04, not 2025,04)
-' FIX v98: Fixed sheet name case consistency - all references now use "utólagos" (lowercase)
-' FIX v99: Enhanced Vissz macro - bold header, multi-level sort (TAJ + FELV), freeze panes at B2
-' FIX v100: Added XLS macro - sorts by TAJ + FELV_IDO, freeze panes at B2, integrated into all run sequences
-' FIX v101: Vissz now applies formatting (bold, sort, freeze) to BOTH original sheet AND copy
-' FIX v102: Reszletes - column 1 now stays as Text format (prevents scientific notation)
-' FIX v103: Added Text format to prevent scientific notation in NemzetiTAJ (column F) and Utolagos (column A)
-' FIX v104: Complete protection - ALL data copying now preserves values as-is (Text format for TSZ and REGI_TSZ L:M columns)
-' FIX v105: Added AutoFit columns to NemzetiTAJ, Vissz (both original and copy), and Reszletes
-' FIX v106: CRITICAL - Vissz (2) sheet now has ALL cells as Text format to prevent lookup issues in TSZ/REGI_TSZ (fixes batch vs RunAll difference)
-' FIX v107: Regi_tsz - fallback to column S (19) if VISSZA header not found
+' Futtatási sorrend: 2. lépés – szamla-pre.vb UTÁN fut
+'
+' MIT CSINÁL:
+'   A szamla-pre.vb által feltöltött munkafüzet munkalapjait formázza,
+'   szűri és összesíti. Minden munkalap saját logikával rendelkezik.
+'
+' MAKRÓ VÁLASZTÓ – BELÉPÉSI PONTOK:
+'   RunAll                        – összes munkalap feldolgozása (utólagossal)
+'   RunAll_WithoutUtolagos        – utólagos lap kihagyásával (ha manuálisan szerkesztett)
+'   Run_BatchFolder               – mappa összes .xls* fájlja egyszerre (utólagossal)
+'   Run_BatchFolder_WithoutUtolagos – batch, utólagos nélkül
+'   Run_Vissz / Run_Tsz / stb.   – egyedi lapok futtatása hibakereséshez
+'
+' MIT CSINÁL LAPONKÉNT:
+'   vissz         – fejléc félkövér, rendezés (TAJ+FELV), panel rögzítés B2-nél,
+'                   AutoFit; másolatot készít "vissz (2)" névvel, szűri (0000/ARES/KRON)
+'   xls           – rendezés (TAJ+FELV_IDO), panel rögzítés B2-nél
+'   Nemzeti TAJ   – F oszlop: "/" beszúrása (4. karakter után), sárga háttér,
+'                   üres sorok törlése, AutoFit
+'   reszletes     – MEGYE+INTKOD oszlop törlése, TSZ másolása A oszlopba piros
+'                   betűvel + "/" formátum, rendezés (TSZ+TRAUMA+P10), AutoFit
+'   tsz           – sorok/oszlopok törlése, L=Pipáló / M=Vissz2 lookup
+'                   (vissz(2) és utólagos alapján), szűrés, online/utólagos jelölés
+'   regi_tsz      – mint tsz, de az előző 4 hónap adataira; VISSZA oszlop törlése
+'   utólagos      – tsz és regi_tsz látható sorait összegyűjti (piros ill. kék),
+'                   rendezés TAJ szerint, K oszlop kitöltése, formázás
+'
+' AMIT SZÜKSÉG ESETÉN MÓDOSÍTANI KELL:
+'   Nincs rendszeresen módosítandó konstans.
+'   A munkalapnevek (vissz, tsz, regi_tsz_utolsó4honap, stb.) kódban rögzítve –
+'   ha a sablon lapnevei változnak, az érintett Sub-okban kell átírni.
+'
+' VERZIÓNAPLÓ:
+'   v97:  dátumformátum megőrzése utólagosban (2025.04 nem lesz 2025,04)
+'   v98:  "utólagos" kis/nagybetű egységesítve
+'   v99:  vissz – félkövér fejléc, TAJ+FELV rendezés, panel B2-nél
+'   v100: xls makró hozzáadva (TAJ+FELV_IDO rendezés, panel)
+'   v101: vissz formázás az eredeti ÉS a másolat lapra is
+'   v102: reszletes – 1. oszlop Text formátum (tudományos jelölés ellen)
+'   v103: NemzetiTAJ F oszlop és utólagos A oszlop Text formátum
+'   v104: tsz és regi_tsz L:M oszlopok Text formátum
+'   v105: AutoFit hozzáadva NemzetiTAJ, Vissz (mindkét lap), reszletes lapokhoz
+'   v106: KRITIKUS – vissz(2) összes cellája Text formátum (batch/RunAll eltérés javítva)
+'   v107: regi_tsz – fallback S oszlopra (19), ha VISSZA fejléc nem található
 ' ============================================
 
 Sub RunAll()

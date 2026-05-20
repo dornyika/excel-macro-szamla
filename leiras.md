@@ -1,8 +1,44 @@
-# szamla-pre-v1.vb — Leírás
+# Számla VB scriptek — Leírás
+
+## Áttekintés
+
+Két egymás után futtatandó script alkotja a feldolgozási folyamatot:
+
+| Sorrend | Script | Modul neve | Mire való? |
+|---------|--------|-----------|------------|
+| 1. | `szamla-pre.vb` | `SzamlaPreProcess` | Sablonfájl feltöltése forrásfájlokból, átnevezés |
+| 2. | `szamla.vb` | `SzamlaProcess` | Formázás, rendezés, szűrés, lookup-ok |
+
+Mindkettő a `Personal.xlsb`-be kerül modulként.
+
+---
+
+## ⚠️ Mit kell módosítani?
+
+### szamla-pre.vb — kötelező ellenőrzés minden új sablonnál
+
+A script egyetlen hardkódolt konstanst tartalmaz, amelyet szükség esetén frissíteni kell:
+
+```vb
+' ~36. sor, SzamlaPreProcess modul tetején:
+Const TARGET_FILENAME As String = "pipalo_v20250827_tol_sablonom.xlsx"
+```
+
+**Ha új pipalo sablon készül** (pl. `pipalo_v20260101_tol_sablonom.xlsx`), ezt a sort kell átírni az új fájlnévre. Különben a script nem találja meg a sablont az almappákban, és minden mappa `[WARN]`-nal vagy hibával végez.
+
+### szamla.vb — nincs rendszeres módosítás
+
+Nincsenek felső szintű konstansok. A sheetnevek (`"vissz"`, `"xls"`, `"tsz"`, `"regi_tsz_utolsó4honap"`, `"utólagos"`, `"Nemzeti TAJ"`, `"reszletes"`) hardkódolva vannak az egyes Sub-okban. Ha a sablon sheetnevei változnak, minden érintett Sub-ban kell keresni és cserélni.
+
+---
+
+---
+
+# szamla-pre.vb — Leírás
 
 ## Mire való?
 
-Ez a script a `szamla-v107.vb` előtt fut. Feladata: minden kiválasztott almappában megtalálja a sablonfájlt (`pipalo_v20250827_tol_sablonom.xlsx`), és feltölti adatokkal az adott almappában lévő forrásfájlokból.
+Ez a script a `szamla.vb` **előtt** fut. Feladata: minden kiválasztott almappában megtalálja a sablonfájlt (`pipalo_v20250827_tol_sablonom.xlsx`), és feltölti adatokkal az adott almappában lévő forrásfájlokból.
 
 A script a `Personal.xlsb`-be kerül, és két makróval indítható:
 - `Run_PreProcess_Batch` — teljes batch feldolgozás (összes almappa)
@@ -97,4 +133,78 @@ Hibakereséshez: a felhasználó közvetlenül kiválaszt egy almappát (nem sz�
 - Váratlan hiba esetén (`FatalError` ág) az összes beállítás garantáltan visszaáll, a nyitott munkafüzet bezárul.
 - Egymásba ágyazott `Dir()` helyett `FileSystemObject`-et használ az almappák iterálásához.
 - Forrásworkbookok `ReadOnly:=True` módban nyílnak meg.
-- `SetForegroundWindow` (Win32 API) gondoskodik arról, hogy az Excel az előtérbe kerüljön a feldolgozás végén (vagy mentési fázisban), így az összegző MsgBox és a hangjelzés nem marad háttérben.
+- `SetForegroundWindow` (Win32 API) gondoskodik arról, hogy az Excel az előtérbe kerüljön a feldolgozás végén, így az összegző MsgBox és a hangjelzés nem marad háttérben.
+
+---
+
+---
+
+# szamla.vb — Leírás
+
+## Mire való?
+
+Ez a script a `szamla-pre.vb` **után** fut. Feladata: a feltöltött sablonfájlok munkalapjait formázza, rendezi, szűri és lookup-okkal egészíti ki.
+
+A script a `Personal.xlsb`-be kerül, és több makróval indítható:
+
+**Egyedi munkafüzethez:**
+- `RunAll` — mind a 7 lap feldolgozása (utólagos-szal együtt)
+- `RunAll_WithoutUtolagos` — utólagos lap kihagyása (ha manuálisan szerkesztik)
+
+**Batch módban (mappában lévő összes fájlhoz):**
+- `Run_BatchFolder` — a kiválasztott mappában lévő összes `.xls*` fájl feldolgozása
+- `Run_BatchFolder_WithoutUtolagos` — ugyanaz, utólagos nélkül
+
+**Egyedi lapok hibakereséshez:**
+- `Run_Vissz`, `Run_Xls`, `Run_NemzetiTAJ`, `Run_Reszletes`, `Run_Tsz`, `Run_Regi_tsz`, `Run_Utolagos`
+
+---
+
+## Mit csinál laponként?
+
+| Lap | Főbb műveletek |
+|-----|---------------|
+| **vissz** | Fejléc félkövér; rendezés TAJ + FELV szerint; panelek rögzítése B2-nél; másolat lap (`vissz (2)`) létrehozása szöveg formátummal; `0000`, `ARES`, `KRON` értékű M oszlop sorok törlése a másolatból |
+| **xls** | Rendezés TAJ + FELV_IDO szerint; panelek rögzítése B2-nél |
+| **Nemzeti TAJ** | F oszlopba `/` jel beillesztése a 4. karakter után (pl. `123456789` → `1234/56789`); sárga háttér az F oszlopon; üres sorok törlése; oszlopszélesség igazítás |
+| **reszletes** | MEGYE és INTKOD oszlopok törlése; új A oszlop beillesztése TSZ-szel (piros betűszín, `/` jellel); P10 és TRAUMA oszlopok sárga kiemelése; rendezés TSZ + TRAUMA (csökkenő) + P10 (csökkenő) szerint; üres sorok törlése |
+| **tsz** | 2–4. sorok és N,O,P,Q,V oszlopok törlése; L:M oszlopok törlése és átnevezése `Pipáló` / `Vissz2`-re; lookup-ok (ld. lent); AutoFilter: I/N = `I` ÉS Vissz2 ≠ `HIÁNYZIK`; szűrt sorokon jelölés |
+| **regi_tsz_utolsó4honap** | N,O,P,Q,W oszlopok törlése; ugyanolyan lookup-ok mint tsz-nél; AutoFilter: Vissz2 ≠ `HIÁNYZIK`; VISSZA oszlop értékének másolása, majd törlése |
+| **utólagos** | Tsz (piros) és regi_tsz (kék) szűrt sorainak összegyűjtése; rendezés TAJ szerint; K oszlop feltöltése (előző sor értékének propagálása); formázás: Calibri 11pt, középre, keret nélkül; felesleges üres sorok törlése |
+
+---
+
+## Pipáló és Vissz2 lookup
+
+A `tsz` és `regi_tsz_utolsó4honap` lapokon a script két lookup oszlopot tölt ki:
+
+| Oszlop | Neve | Keresés helye | Mit vesz át? |
+|--------|------|--------------|--------------|
+| L | **Pipáló** | `utólagos` lap A oszlopa | C oszlop értéke (ha megtalálta a TAJ-t) |
+| M | **Vissz2** | `vissz (2)` lap A oszlopa | M oszlop értéke (ha megtalálta a TAJ-t) |
+
+Ha a TAJ nem található: `"HIÁNYZIK"` értéket kap.
+
+Az AutoFilter ezután a Vissz2 = `"HIÁNYZIK"` sorokat szűri ki. A szűrt (látható) sorokon a Pipáló értéke alapján jelöl:
+- Ha Pipáló nem üres: `"online"` → a sor online úton érkezett
+- Ha Pipáló üres: `"utólagos"` (tsz lapon) vagy a VISSZA oszlop értéke (regi_tsz lapon)
+
+---
+
+## Batch mód
+
+A `Run_BatchFolder` / `Run_BatchFolder_WithoutUtolagos` makrók:
+1. Mappapicker dialógus — a felhasználó kiválaszt egy mappát
+2. Megkeresi az összes `.xls*` fájlt a mappában
+3. Minden fájlt megnyit, feldolgoz, majd a `Modified\` almappába ment (ha nem létezik, létrehozza)
+4. Az eredeti fájlok nem módosulnak
+
+---
+
+## Technikai megjegyzések
+
+- Minden lapmakrónak van `Optional silent As Boolean = False` paramétere — batch módban `True`-val hívódnak, hogy ne jelenjenek meg MsgBox-ok.
+- Futás közben `ScreenUpdating`, `Calculation`, `EnableEvents` ki van kapcsolva; batch mentés előtt visszaállnak (fájlkorrupció elkerülése érdekében).
+- Lookup-ok `.Find()` metódussal dolgoznak (`LookIn:=xlValues, LookAt:=xlWhole` — pontos egyezés).
+- Szöveg formátum (`"@"`) alkalmazva TAJ és TSZ azonosítókat tartalmazó oszlopokon, mielőtt az értékek bekerülnek.
+- AutoFilter használat előtt mindig `ws.AutoFilterMode = False` hívódik.
