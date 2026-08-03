@@ -45,6 +45,7 @@
 '   v105: AutoFit hozzáadva NemzetiTAJ, Vissz (mindkét lap), reszletes lapokhoz
 '   v106: KRITIKUS – vissz(2) összes cellája Text formátum (batch/RunAll eltérés javítva)
 '   v107: regi_tsz – fallback S oszlopra (19), ha VISSZA fejléc nem található
+'   v108: vissz/vissz(2)/xls – freeze panes SplitRow/SplitColumn=1 explicit megadással (görgetéstől független)
 ' ============================================
 
 Sub RunAll()
@@ -476,10 +477,12 @@ Sub Vissz(Optional silent As Boolean = False)
         End With
     End If
     
-    ' Freeze panes at B2 (freeze first row and first column)
-    wsOriginal.Range("B2").Select
+    ' Freeze panes at row 1 (first row only, no column freeze)
+    ActiveWindow.FreezePanes = False
+    ActiveWindow.SplitRow = 1
+    ActiveWindow.SplitColumn = 0
     ActiveWindow.FreezePanes = True
-    
+
     ' AutoFit all columns on original sheet
     wsOriginal.Columns.AutoFit
     
@@ -522,9 +525,11 @@ Sub Vissz(Optional silent As Boolean = False)
         End With
     End If
     
-    ' Freeze panes on copy
+    ' Freeze panes on copy (first row only, no column freeze)
     wsCopy.Activate
-    wsCopy.Range("B2").Select
+    ActiveWindow.FreezePanes = False
+    ActiveWindow.SplitRow = 1
+    ActiveWindow.SplitColumn = 0
     ActiveWindow.FreezePanes = True
     
     ' AutoFit all columns on copy sheet
@@ -607,7 +612,9 @@ Sub XLS(Optional silent As Boolean = False)
     
     ' Freeze panes at B2 (freeze first row and first column)
     ws.Activate
-    ws.Range("B2").Select
+    ActiveWindow.FreezePanes = False
+    ActiveWindow.SplitRow = 1
+    ActiveWindow.SplitColumn = 1
     ActiveWindow.FreezePanes = True
     
     If Not silent Then
