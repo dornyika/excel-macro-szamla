@@ -1,6 +1,6 @@
 ' ============================================
 ' SZAMLA PRE-PROCESS - VERSION 1
-' Last Updated: 2026-03-08
+' Last Updated: 2026-08-03
 ' Futtatási sorrend: 1. lépés – ELŐBB fut, mint a szamla.vb
 '
 ' MIT CSINÁL:
@@ -33,7 +33,7 @@ Option Explicit
 
 Private Declare PtrSafe Function SetForegroundWindow Lib "user32" (ByVal hwnd As LongPtr) As Long
 
-Private Const TARGET_FILENAME As String = "pipalo_v20250827_tol_sablonom.xlsx"
+Private Const TARGET_FILENAME As String = "pipalo_v20260718_sablon_v2604_tol.xlsx"
 Private g_warnings As String
 
 
@@ -635,10 +635,9 @@ Sub FillVissz(wb As Workbook, folderPath As String)
     Set wsSrc = srcWb.Sheets(1)
     lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
-    ' NumberFormat csak az adatsorokra (2. sortól) — fejléc kizárva, hogy ne reseteljük a sormagasságot
-    wsTarget.Rows("2:" & wsTarget.Rows.Count).NumberFormat = "@"
-    wsTarget.Range("A1:AN" & lastRow).Value = wsSrc.Range("A1:AN" & lastRow).Value
-    wsTarget.Rows(1).WrapText = False
+    ' Teljes másolás (érték+formátum), pontosan mint egy sima Ctrl+V a forrásból — semmi utólagos módosítás
+    wsSrc.Range("A1:AN" & lastRow).Copy Destination:=wsTarget.Range("A1")
+    Application.CutCopyMode = False
 
     srcWb.Close SaveChanges:=False
 End Sub
@@ -706,7 +705,6 @@ Sub FillXLS(wb As Workbook, folderPath As String)
         Exit Sub
     End If
 
-    wsTarget.Cells.NumberFormat = "@"
     destRow = 1
 
     ' Fő fájl feldolgozása: 2. sortól, 50 oszlop (A:AX) → cél A1-től
@@ -724,7 +722,9 @@ Sub FillXLS(wb As Workbook, folderPath As String)
 
     If lastRow >= 2 Then
         rowCount = lastRow - 1
-        wsTarget.Range("A1").Resize(rowCount, 50).Value = wsSrc.Range("A2").Resize(rowCount, 50).Value
+        ' Teljes másolás (érték+formátum), pontosan mint egy sima Ctrl+V — semmi utólagos módosítás
+        wsSrc.Range("A2").Resize(rowCount, 50).Copy Destination:=wsTarget.Range("A1")
+        Application.CutCopyMode = False
         destRow = rowCount + 1
     End If
 
@@ -744,7 +744,8 @@ Sub FillXLS(wb As Workbook, folderPath As String)
                 lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
                 If lastRow >= 3 Then
                     rowCount = lastRow - 2
-                    wsTarget.Cells(destRow, 1).Resize(rowCount, 50).Value = wsSrc.Range("A3").Resize(rowCount, 50).Value
+                    wsSrc.Range("A3").Resize(rowCount, 50).Copy Destination:=wsTarget.Cells(destRow, 1)
+                    Application.CutCopyMode = False
                     wsTarget.Cells(destRow, 1).Resize(rowCount, 50).Font.Color = RGB(255, 0, 0)
                     destRow = destRow + rowCount
                 End If
@@ -797,7 +798,12 @@ Sub FillTsz(wb As Workbook, folderPath As String)
 
     wsTarget.Cells.NumberFormat = "@"
     If lastRow >= 2 Then
-        wsTarget.Range("A1").Resize(lastRow - 1, 22).Value = wsSrc.Range("A2").Resize(lastRow - 1, 22).Value
+        ' Copy+PasteSpecial (nem sima .Value= átadás), hogy pontosan azt a viselkedést
+        ' reprodukáljuk, mint a kézi "Paste as Value" — a sima értékadás Calculation=Manual
+        ' mellett nem váltja ki Excel normál sormagasság-újraszámolását
+        wsSrc.Range("A2").Resize(lastRow - 1, 22).Copy
+        wsTarget.Range("A1").PasteSpecial Paste:=xlPasteValues
+        Application.CutCopyMode = False
     End If
 
     srcWb.Close SaveChanges:=False
@@ -868,7 +874,12 @@ Sub FillRegiTsz(wb As Workbook, folderPath As String, period As String)
     wsTarget.Rows("2:" & wsTarget.Rows.Count).NumberFormat = "@"
 
     ' Fejléc sor másolása értékként (A:W = 23 oszlop)
-    wsTarget.Cells(1, 1).Resize(1, 23).Value = wsSrc.Cells(1, 1).Resize(1, 23).Value
+    ' Copy+PasteSpecial (nem sima .Value= átadás), hogy pontosan azt a viselkedést
+    ' reprodukáljuk, mint a kézi "Paste as Value" — a sima értékadás Calculation=Manual
+    ' mellett nem váltja ki Excel normál sormagasság-újraszámolását
+    wsSrc.Cells(1, 1).Resize(1, 23).Copy
+    wsTarget.Cells(1, 1).PasteSpecial Paste:=xlPasteValues
+    Application.CutCopyMode = False
     wsTarget.Rows(1).WrapText = False
 
     ' Adatsorok szűrése: S oszlop (19.) tartalmazza-e bármelyik YYMM kódot
@@ -883,10 +894,12 @@ Sub FillRegiTsz(wb As Workbook, folderPath As String, period As String)
             End If
         Next k
         If matched Then
-            wsTarget.Cells(destRow, 1).Resize(1, 23).Value = wsSrc.Cells(i, 1).Resize(1, 23).Value
+            wsSrc.Cells(i, 1).Resize(1, 23).Copy
+            wsTarget.Cells(destRow, 1).PasteSpecial Paste:=xlPasteValues
             destRow = destRow + 1
         End If
     Next i
+    Application.CutCopyMode = False
 
     srcWb.Close SaveChanges:=False
 End Sub
@@ -925,9 +938,10 @@ Sub FillUtolagos(wb As Workbook, folderPath As String, period As String)
     Set wsSrc = srcWb.Sheets(1)
     lastRow = wsSrc.Cells(wsSrc.Rows.Count, 1).End(xlUp).Row
 
-    wsTarget.Cells.NumberFormat = "@"
     If lastRow >= 2 Then
-        wsTarget.Range("A1").Resize(lastRow - 1, 15).Value = wsSrc.Range("A2").Resize(lastRow - 1, 15).Value
+        ' Teljes másolás (érték+formátum), pontosan mint egy sima Ctrl+V — semmi utólagos módosítás
+        wsSrc.Range("A2").Resize(lastRow - 1, 15).Copy Destination:=wsTarget.Range("A1")
+        Application.CutCopyMode = False
     End If
 
     srcWb.Close SaveChanges:=False
