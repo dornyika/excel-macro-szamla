@@ -1,6 +1,6 @@
 ' ============================================
-' SZAMLA - VERSION 107
-' Last Updated: 2025-01-11
+' SZAMLA - VERSION 109
+' Last Updated: 2026-08-06
 ' Futtatási sorrend: 2. lépés – szamla-pre.vb UTÁN fut
 '
 ' MIT CSINÁL:
@@ -11,7 +11,6 @@
 '   RunAll                        – összes munkalap feldolgozása (utólagossal)
 '   RunAll_WithoutUtolagos        – utólagos lap kihagyásával (ha manuálisan szerkesztett)
 '   Run_BatchFolder               – mappa összes .xls* fájlja egyszerre (utólagossal)
-'   Run_BatchFolder_WithoutUtolagos – batch, utólagos nélkül
 '   Run_Vissz / Run_Tsz / stb.   – egyedi lapok futtatása hibakereséshez
 '
 ' MIT CSINÁL LAPONKÉNT:
@@ -46,7 +45,28 @@
 '   v106: KRITIKUS – vissz(2) összes cellája Text formátum (batch/RunAll eltérés javítva)
 '   v107: regi_tsz – fallback S oszlopra (19), ha VISSZA fejléc nem található
 '   v108: vissz/vissz(2)/xls – freeze panes SplitRow/SplitColumn=1 explicit megadással (görgetéstől független)
+'   v109: RunAll_BatchFolder – az Application beállítások (Calculation/ScreenUpdating/stb.)
+'         visszaállítása hibatűrővé téve; a wb.Close után közvetlenül ezek az
+'         értékadások időzítésfüggő 1004-es hibát ("Method 'Calculation' of
+'         object '_Application' failed") dobhatnak, mert az Excel belső
+'         ablakkezelése ilyenkor néha még nincs teljesen kész állapotban.
+'         Naplózzuk, ha ez előfordul, de a batch nem áll le miatta.
+'         Run_BatchFolder_WithoutUtolagos eltávolítva (nincs rá szükség).
 ' ============================================
+
+Private g_diagLogPath As String
+
+' Naplózza a batch futás közben elkapott, nem kritikus Application-hibákat
+' (lásd v109 megjegyzés). Összeomlás esetén is megmarad, amit addig írt.
+Sub DiagLog(msg As String)
+    Dim fileNum As Integer
+    On Error Resume Next
+    fileNum = FreeFile
+    Open g_diagLogPath For Append As #fileNum
+    Print #fileNum, Format(Now, "HH:MM:SS") & "  " & msg
+    Close #fileNum
+    On Error GoTo 0
+End Sub
 
 Sub RunAll()
     ' Master macro to run all processing macros
@@ -119,10 +139,6 @@ Sub Run_BatchFolder()
     RunAll_BatchFolder
 End Sub
 
-Sub Run_BatchFolder_WithoutUtolagos()
-    RunAll_BatchFolder_WithoutUtolagos
-End Sub
-
 Sub RunAll_BatchFolder(Optional hidden As Boolean = True)
     ' Batch process all Excel files in a selected folder - WITH UTOLAGOS
     Dim folderPath As String
@@ -159,7 +175,10 @@ Sub RunAll_BatchFolder(Optional hidden As Boolean = True)
     ' Create Modified subfolder
     modifiedFolder = folderPath & "Modified\"
     If Dir(modifiedFolder, vbDirectory) = "" Then MkDir modifiedFolder
-    
+
+    g_diagLogPath = modifiedFolder & "batch_diag_" & Format(Now, "YYYYMMDD_HHMMSS") & ".txt"
+    DiagLog "=== Batch start ==="
+
     ' Count files
     totalFiles = 0
     fileName = Dir(folderPath & "*.xls*")
@@ -205,45 +224,86 @@ Sub RunAll_BatchFolder(Optional hidden As Boolean = True)
             If Err.Number = 0 Then
                 ' DON'T hide windows - leave visible
                 ' wb.Windows(1).Visible = False  <- REMOVED
-                
+
+                DiagLog "--- Processing: " & fileName & " ---"
+
                 ' Activate the workbook
                 wb.Activate
-                
+
                 ' Run macros with optimizations ON
+                Err.Clear
                 Vissz True
+                If Err.Number <> 0 Then DiagLog "Vissz: " & Err.Number & " - " & Err.Description
+                Err.Clear
                 XLS True
+                If Err.Number <> 0 Then DiagLog "XLS: " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Tsz True
+                If Err.Number <> 0 Then DiagLog "Tsz: " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Regi_tsz True
+                If Err.Number <> 0 Then DiagLog "Regi_tsz: " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Utolagos True
+                If Err.Number <> 0 Then DiagLog "Utolagos: " & Err.Number & " - " & Err.Description
+                Err.Clear
                 NemzetiTAJ True
+                If Err.Number <> 0 Then DiagLog "NemzetiTAJ: " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Reszletes True
-                
+                If Err.Number <> 0 Then DiagLog "Reszletes: " & Err.Number & " - " & Err.Description
+                Err.Clear
+
                 ' Switch to utólagos sheet before saving
                 On Error Resume Next
                 wb.Worksheets("utólagos").Activate
                 wb.Worksheets("utólagos").Range("A1").Select
                 On Error GoTo 0
-                
-                ' CRITICAL: Restore settings BEFORE saving
+
+                ' CRITICAL: Restore settings BEFORE saving.
+                ' Hibatűrő + naplózott: a wb.Close után/wb.Close előtt ezek az
+                ' értékadások időzítésfüggő 1004-es hibát dobhatnak (lásd v109).
+                On Error Resume Next
+                Err.Clear
                 Application.ScreenUpdating = True
+                If Err.Number <> 0 Then DiagLog "ScreenUpdating=True (pre-save): " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Application.Calculation = xlCalculationAutomatic
+                If Err.Number <> 0 Then DiagLog "Calculation=Automatic (pre-save): " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Application.EnableEvents = True
+                If Err.Number <> 0 Then DiagLog "EnableEvents=True (pre-save): " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Application.DisplayAlerts = True
+                If Err.Number <> 0 Then DiagLog "DisplayAlerts=True (pre-save): " & Err.Number & " - " & Err.Description
+                On Error GoTo 0
                 DoEvents
-                
+
                 ' Ensure workbook is active and ready
                 wb.Activate
-                
+
                 ' Save with normal Excel state
                 wb.SaveAs modifiedFolder & fileName, FileFormat:=wb.FileFormat
                 wb.Close SaveChanges:=False
-                
-                ' Turn optimizations back ON for next file
+
+                ' Turn optimizations back ON for next file.
+                ' Hibatűrő + naplózott (lásd v109) - ez a leggyakoribb hely, ahol
+                ' a wb.Close után az 1004-es hiba jelentkezett.
+                On Error Resume Next
+                Err.Clear
                 Application.ScreenUpdating = False
+                If Err.Number <> 0 Then DiagLog "ScreenUpdating=False (post-close): " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Application.Calculation = xlCalculationManual
+                If Err.Number <> 0 Then DiagLog "Calculation=Manual (post-close): " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Application.EnableEvents = False
+                If Err.Number <> 0 Then DiagLog "EnableEvents=False (post-close): " & Err.Number & " - " & Err.Description
+                Err.Clear
                 Application.DisplayAlerts = False
-                
+                If Err.Number <> 0 Then DiagLog "DisplayAlerts=False (post-close): " & Err.Number & " - " & Err.Description
+                On Error GoTo 0
+
                 processedCount = processedCount + 1
             Else
                 errorCount = errorCount + 1
@@ -260,153 +320,14 @@ Sub RunAll_BatchFolder(Optional hidden As Boolean = True)
     Application.EnableEvents = True
     Application.DisplayAlerts = True
     
+    DiagLog "=== Batch end === Processed: " & processedCount & "  Errors: " & errorCount
+
     ' Summary
     MsgBox "Batch processing complete!" & vbCrLf & vbCrLf & _
            "Files processed: " & processedCount & vbCrLf & _
            "Errors: " & errorCount & vbCrLf & vbCrLf & _
-           "Saved to: " & modifiedFolder, vbInformation
-End Sub
-
-Sub RunAll_BatchFolder_WithoutUtolagos(Optional hidden As Boolean = True)
-    ' Batch process WITHOUT UTOLAGOS
-    Dim folderPath As String
-    Dim modifiedFolder As String
-    Dim fileName As String
-    Dim wb As Workbook
-    Dim processedCount As Long
-    Dim errorCount As Long
-    Dim totalFiles As Long
-    Dim userCancelled As Boolean
-    
-    ' Warn if other workbooks open
-    If Workbooks.Count > 1 Then
-        If MsgBox("Warning: Close other workbooks before batch processing." & vbCrLf & vbCrLf & "Continue anyway?", vbYesNo + vbExclamation) = vbNo Then
-            Exit Sub
-        End If
-    End If
-    
-    ' Select folder
-    With Application.FileDialog(msoFileDialogFolderPicker)
-        .Title = "Select folder containing Excel files"
-        .AllowMultiSelect = False
-        If .Show = -1 Then
-            folderPath = .SelectedItems(1)
-        Else
-            MsgBox "No folder selected.", vbInformation
-            Exit Sub
-        End If
-    End With
-    
-    If Right(folderPath, 1) <> "\" Then folderPath = folderPath & "\"
-    
-    ' Create Modified folder
-    modifiedFolder = folderPath & "Modified\"
-    If Dir(modifiedFolder, vbDirectory) = "" Then MkDir modifiedFolder
-    
-    ' Count files
-    totalFiles = 0
-    fileName = Dir(folderPath & "*.xls*")
-    Do While fileName <> ""
-        If Left(fileName, 1) <> "~" Then totalFiles = totalFiles + 1
-        fileName = Dir
-    Loop
-    
-    If totalFiles = 0 Then
-        MsgBox "No Excel files found.", vbExclamation
-        Exit Sub
-    End If
-    
-    ' *** CONFIRMATION WITH WARNING ***
-    If MsgBox("Process " & totalFiles & " file(s) (Utolagos SKIPPED)." & vbCrLf & vbCrLf & _
-              "Progress will be shown in the status bar." & vbCrLf & _
-              "Processing cannot be interrupted once started." & vbCrLf & vbCrLf & _
-              "Continue?", vbYesNo + vbQuestion, "Batch Processing") = vbNo Then
-        Exit Sub
-    End If
-    
-    ' Optimize but keep status bar
-    Application.ScreenUpdating = False
-    Application.Calculation = xlCalculationManual
-    Application.EnableEvents = False
-    Application.DisplayAlerts = False
-    Application.DisplayStatusBar = True
-    
-    ' Process
-    fileName = Dir(folderPath & "*.xls*")
-    processedCount = 0
-    errorCount = 0
-    
-    Do While fileName <> ""
-        If Left(fileName, 1) <> "~" Then
-            ' Update status bar
-            Application.StatusBar = "Processing (" & (processedCount + errorCount + 1) & "/" & totalFiles & "): " & fileName
-            DoEvents
-            
-            On Error Resume Next
-            Set wb = Workbooks.Open(folderPath & fileName, ReadOnly:=False, UpdateLinks:=False)
-            
-            If Err.Number = 0 Then
-                ' DON'T hide windows
-                ' wb.Windows(1).Visible = False  <- REMOVED
-                
-                ' Activate the workbook
-                wb.Activate
-                
-                ' Run macros with optimizations
-                Vissz True
-                XLS True
-                Tsz True
-                Regi_tsz True
-                NemzetiTAJ True
-                Reszletes True
-                
-                ' Switch to utólagos sheet before saving
-                On Error Resume Next
-                wb.Worksheets("utólagos").Activate
-                wb.Worksheets("utólagos").Range("A1").Select
-                On Error GoTo 0
-                
-                ' CRITICAL: Restore settings BEFORE saving
-                Application.ScreenUpdating = True
-                Application.Calculation = xlCalculationAutomatic
-                Application.EnableEvents = True
-                Application.DisplayAlerts = True
-                DoEvents
-                
-                ' Ensure workbook is active
-                wb.Activate
-                
-                ' Save with normal Excel state
-                wb.SaveAs modifiedFolder & fileName, FileFormat:=wb.FileFormat
-                wb.Close SaveChanges:=False
-                
-                ' Turn optimizations back ON
-                Application.ScreenUpdating = False
-                Application.Calculation = xlCalculationManual
-                Application.EnableEvents = False
-                Application.DisplayAlerts = False
-                
-                processedCount = processedCount + 1
-            Else
-                errorCount = errorCount + 1
-            End If
-            On Error GoTo 0
-        End If
-        fileName = Dir
-    Loop
-    
-    ' Restore
-    Application.StatusBar = False
-    Application.ScreenUpdating = True
-    Application.Calculation = xlCalculationAutomatic
-    Application.EnableEvents = True
-    Application.DisplayAlerts = True
-    
-    ' Summary
-    MsgBox "Complete (Utolagos skipped)!" & vbCrLf & vbCrLf & _
-           "Processed: " & processedCount & vbCrLf & _
-           "Errors: " & errorCount & vbCrLf & vbCrLf & _
-           "Saved to: " & modifiedFolder, vbInformation
+           "Saved to: " & modifiedFolder & vbCrLf & vbCrLf & _
+           "Diag log: " & g_diagLogPath, vbInformation
 End Sub
 
 Sub OptimizePerformance(turnOff As Boolean)

@@ -153,7 +153,6 @@ A script a `Personal.xlsb`-be kerül, és több makróval indítható:
 
 **Batch módban (mappában lévő összes fájlhoz):**
 - `Run_BatchFolder` — a kiválasztott mappában lévő összes `.xls*` fájl feldolgozása
-- `Run_BatchFolder_WithoutUtolagos` — ugyanaz, utólagos nélkül
 
 **Egyedi lapok hibakereséshez:**
 - `Run_Vissz`, `Run_Xls`, `Run_NemzetiTAJ`, `Run_Reszletes`, `Run_Tsz`, `Run_Regi_tsz`, `Run_Utolagos`
@@ -193,18 +192,24 @@ Az AutoFilter ezután a Vissz2 = `"HIÁNYZIK"` sorokat szűri ki. A szűrt (lát
 
 ## Batch mód
 
-A `Run_BatchFolder` / `Run_BatchFolder_WithoutUtolagos` makrók:
+A `Run_BatchFolder` makró:
 1. Mappapicker dialógus — a felhasználó kiválaszt egy mappát
 2. Megkeresi az összes `.xls*` fájlt a mappában
 3. Minden fájlt megnyit, feldolgoz, majd a `Modified\` almappába ment (ha nem létezik, létrehozza)
 4. Az eredeti fájlok nem módosulnak
+
+### Batch hibatűrés és naplózás (v109)
+
+A `wb.Close` után/előtt közvetlenül futó `Application.Calculation`/`ScreenUpdating`/`EnableEvents`/`DisplayAlerts` értékadások időzítésfüggő módon 1004-es hibát ("Method 'Calculation' of object '_Application' failed") dobhatnak — ez az Excel belső ablakkezelésének egy szakaszos (nem minden futásnál jelentkező) kvirkje, nem determinisztikus kódhiba. Ezért ezek a sorok, valamint a 7 lap-feldolgozó hívás (`Vissz`, `XLS`, `Tsz`, `Regi_tsz`, `Utolagos`, `NemzetiTAJ`, `Reszletes`) hibatűrővé lettek téve: ha valamelyik hibázik, a batch **nem áll le**, hanem naplózza a hibát és folytatja a következő fájllal/lépéssel.
+
+A `Modified\` mappában minden batch futáshoz létrejön egy `batch_diag_YYYYMMDD_HHMMSS.txt` napló, ami soronként rögzíti, melyik fájlnál, melyik lépésnél (lap-sub vagy Application-beállítás) történt hiba, ha történt.
 
 ---
 
 ## Technikai megjegyzések
 
 - Minden lapmakrónak van `Optional silent As Boolean = False` paramétere — batch módban `True`-val hívódnak, hogy ne jelenjenek meg MsgBox-ok.
-- Futás közben `ScreenUpdating`, `Calculation`, `EnableEvents` ki van kapcsolva; batch mentés előtt visszaállnak (fájlkorrupció elkerülése érdekében).
+- Futás közben `ScreenUpdating`, `Calculation`, `EnableEvents` ki van kapcsolva; batch mentés előtt visszaállnak (fájlkorrupció elkerülése érdekében). Ezen visszaállítások hibatűrők — ld. fent.
 - Lookup-ok `.Find()` metódussal dolgoznak (`LookIn:=xlValues, LookAt:=xlWhole` — pontos egyezés).
 - Szöveg formátum (`"@"`) alkalmazva TAJ és TSZ azonosítókat tartalmazó oszlopokon, mielőtt az értékek bekerülnek.
 - AutoFilter használat előtt mindig `ws.AutoFilterMode = False` hívódik.
